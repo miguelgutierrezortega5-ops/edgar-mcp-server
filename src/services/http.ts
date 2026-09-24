@@ -1,4 +1,4 @@
-import { REQUEST_TIMEOUT_MS, SEC_MAX_REQUESTS_PER_SECOND } from "../constants.js";
+import { CACHE_MAX_CHARS, REQUEST_TIMEOUT_MS, SEC_MAX_REQUESTS_PER_SECOND } from "../constants.js";
 
 export class HttpError extends Error {
   constructor(
@@ -48,16 +48,26 @@ async function throttle(): Promise<void> {
   }
 }
 
-// ---------- Small TTL + LRU cache ----------
+// ---------- TTL + LRU cache, bounded by size ----------
 
-const CACHE_MAX_ENTRIES = 40;
-const cache = new Map<string, { at: number; ttl: number; value: unknown }>();
+// Company facts for a large filer run to several MB each, so bound the cache by the size of
+// the cached bodies (in characters) rather than by entry count.
+const cache = new Map<string, { expires: number; size: number; value: unknown }>();
+let cacheSize = 0;
+const inflight = new Map<string, Promise<unknown>>();
+
+function cacheDelete(key: string): void {
+  const hit = cache.get(key);
+  if (!hit) return;
+  cacheSize -= hit.size;
+  cache.delete(key);
+}
 
 function cacheGet<T>(key: string): T | undefined {
   const hit = cache.get(key);
   if (!hit) return undefined;
-  if (Date.now() - hit.at > hit.ttl) {
-    cache.delete(key);
+  if (Date.now() > hit.expires) {
+    cacheDelete(key);
     return undefined;
   }
   cache.delete(key);
@@ -65,9 +75,31 @@ function cacheGet<T>(key: string): T | undefined {
   return hit.value as T;
 }
 
-function cacheSet(key: string, value: unknown, ttl: number): void {
-  cache.set(key, { at: Date.now(), ttl, value });
-  while (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value!);
+function cacheSet(key: string, value: unknown, ttl: number, size: number): void {
+  if (size > CACHE_MAX_CHARS / 4) return; // one huge body must not flush everything else
+  cacheDelete(key);
+  cache.set(key, { expires: Date.now() + ttl, size, value });
+  cacheSize += size;
+  while (cacheSize > CACHE_MAX_CHARS) cacheDelete(cache.keys().next().value!);
+}
+
+/**
+ * Memoize an async load under `key` for `ttl` ms. Concurrent callers share one in-flight
+ * load, so parallel tool calls for the same company fetch it only once.
+ */
+export async function cached<T>(key: string, ttl: number, load: () => Promise<{ value: T; size: number }>): Promise<T> {
+  const hit = cacheGet<T>(key);
+  if (hit !== undefined) return hit;
+  const pending = inflight.get(key);
+  if (pending) return pending as Promise<T>;
+  const p = load()
+    .then(({ value, size }) => {
+      cacheSet(key, value, ttl, size);
+      return value;
+    })
+    .finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
 }
 
 export interface GetOptions {
@@ -76,16 +108,16 @@ export interface GetOptions {
   ttl?: number;
 }
 
-/** GET with SEC-compliant headers, throttling, retry on 429/5xx, and optional caching. */
-export async function httpGet<T = unknown>(host: Host, pathAndQuery: string, opts: GetOptions = {}): Promise<T> {
-  const as = opts.as ?? "json";
-  const url = hostUrl(host, pathAndQuery);
-  const key = `${as}:${url}`;
-  if (opts.ttl) {
-    const hit = cacheGet<T>(key);
-    if (hit !== undefined) return hit;
-  }
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const MAX_ATTEMPTS = 3;
 
+/** Wait before retry `attempt` (0-based), honouring Retry-After (seconds) when the server sends it. */
+function backoffMs(attempt: number, retryAfter?: string | null): number {
+  const s = Number(retryAfter);
+  return Number.isFinite(s) && s > 0 ? Math.min(s * 1000, 30_000) : 1000 * 2 ** attempt;
+}
+
+async function fetchBody(host: Host, url: string, as: "json" | "text"): Promise<string> {
   const isSec = host === "data" || host === "www" || host === "efts";
   const headers: Record<string, string> = {
     "User-Agent": isSec ? secUserAgent() : "Mozilla/5.0 (compatible; edgar-mcp-server)",
@@ -93,27 +125,39 @@ export async function httpGet<T = unknown>(host: Host, pathAndQuery: string, opt
   };
 
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (isSec) await throttle();
+    let retryAfter: string | null = null;
     try {
       const res = await fetch(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       if (res.status === 429 || res.status >= 500) {
         lastError = new HttpError(res.status, url, res.statusText);
-        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
-        continue;
+        retryAfter = res.headers.get("retry-after");
+        await res.body?.cancel().catch(() => undefined);
+      } else {
+        const body = await res.text();
+        if (!res.ok) throw new HttpError(res.status, url, body.slice(0, 200) || res.statusText);
+        return body;
       }
-      const body = await res.text();
-      if (!res.ok) throw new HttpError(res.status, url, body.slice(0, 200) || res.statusText);
-      const value = (as === "json" ? JSON.parse(body) : body) as T;
-      if (opts.ttl) cacheSet(key, value, opts.ttl);
-      return value;
     } catch (e) {
       if (e instanceof HttpError) throw e;
-      lastError = e;
-      if (e instanceof SyntaxError) break;
+      lastError = e; // network error or timeout: retry
     }
+    if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt, retryAfter));
   }
   throw lastError;
+}
+
+/** GET with SEC-compliant headers, throttling, retry on 429/5xx/network errors, and optional caching. */
+export async function httpGet<T = unknown>(host: Host, pathAndQuery: string, opts: GetOptions = {}): Promise<T> {
+  const as = opts.as ?? "json";
+  const url = hostUrl(host, pathAndQuery);
+  const load = async () => {
+    const body = await fetchBody(host, url, as);
+    return { value: (as === "json" ? JSON.parse(body) : body) as T, size: body.length };
+  };
+  if (!opts.ttl) return (await load()).value;
+  return cached(`${as}:${url}`, opts.ttl, load);
 }
 
 export function formatError(error: unknown): string {

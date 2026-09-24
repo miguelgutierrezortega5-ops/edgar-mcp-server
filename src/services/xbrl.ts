@@ -35,7 +35,7 @@ export function getCompanyFacts(cik: string): Promise<CompanyFacts> {
 const PERIODIC_FORMS = /^(10-K|10-Q|20-F|40-F|10-KT)(\/A)?$/;
 const ANNUAL_FORMS = /^(10-K|20-F|40-F|10-KT)(\/A)?$/;
 
-const days = (start: string, end: string) => (Date.parse(end) - Date.parse(start)) / 86_400_000;
+export const days = (start: string, end: string) => (Date.parse(end) - Date.parse(start)) / 86_400_000;
 
 export interface Point {
   start?: string;
@@ -125,11 +125,23 @@ export function conceptSeries(facts: CompanyFacts, name: string, kind: PeriodKin
   return out;
 }
 
-/** Merge candidate concepts: for each period, the first candidate with a value wins. */
+// Series are derived from the cached (immutable) facts object, so memoize them per object.
+const seriesMemo = new WeakMap<CompanyFacts, Map<string, Map<string, Point>>>();
+
+/**
+ * Merge candidate concepts: for each period, the first candidate with a value wins.
+ * The returned map is memoized and shared between callers: do not mutate it.
+ */
 export function firstAvailable(facts: CompanyFacts, candidates: string[], kind: PeriodKind, unitPref?: string): Map<string, Point> {
+  let memo = seriesMemo.get(facts);
+  if (!memo) seriesMemo.set(facts, (memo = new Map()));
+  const key = `${kind}|${unitPref ?? ""}|${candidates.join(",")}`;
+  const hit = memo.get(key);
+  if (hit) return hit;
   const merged = new Map<string, Point>();
   for (const c of candidates) {
     for (const [end, p] of conceptSeries(facts, c, kind, unitPref)) if (!merged.has(end)) merged.set(end, p);
   }
+  memo.set(key, merged);
   return merged;
 }

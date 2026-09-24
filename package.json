@@ -12,7 +12,8 @@
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "clean": "rm -rf dist",
-    "test": "npm run build && node test/smoke.mjs"
+    "test": "npm run build && node --test test/unit.test.mjs",
+    "test:live": "npm run build && node test/smoke.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -27,5 +28,10 @@
     "@types/node": "^26.6.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
-  }
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md"
+  ]
 }

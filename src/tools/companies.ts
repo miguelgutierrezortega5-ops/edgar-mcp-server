@@ -4,7 +4,7 @@ import { ResponseFormat } from "../constants.js";
 import { companyField, loadRegistrants, padCik, resolveCompany } from "../services/companies.js";
 import { archiveUrl, findSection, getSubmissions, htmlToText, recentFilings, SECTIONS } from "../services/filings.js";
 import { dateField, mdTable, render, responseFormatField, textResult } from "../services/format.js";
-import { httpGet } from "../services/http.js";
+import { cached, httpGet } from "../services/http.js";
 import { registerReadTool } from "./register.js";
 
 export function registerCompanyTools(server: McpServer): void {
@@ -170,8 +170,11 @@ Omit accession_number to read the latest 10-K (or 20-F/40-F).`,
         throw new Error(`'${document}' is not in this filing. Available documents: ${[filing.primaryDocument, ...exhibits].join(", ")}.`);
       }
       const url = document ? archiveUrl(reg.cik, filing.accessionNumber, document) : filing.url;
-      const html = await httpGet<string>("www", new URL(url).pathname, { as: "text", ttl: 60 * 60 * 1000 });
-      const text = htmlToText(html);
+      // Cache the extracted text, not the HTML: paging through a 10-K then skips re-parsing megabytes of markup.
+      const text = await cached(`filing-text:${url}`, 60 * 60 * 1000, async () => {
+        const plain = htmlToText(await httpGet<string>("www", new URL(url).pathname, { as: "text" }));
+        return { value: plain, size: plain.length };
+      });
 
       let start = offset;
       let end = text.length;

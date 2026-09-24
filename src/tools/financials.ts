@@ -220,9 +220,17 @@ Annual/quarterly keep ~1-year/~1-quarter durations (quarters derived from YTD wh
 Period formats: 'CY2025' (annual duration), 'CY2025Q4' (quarter duration), 'CY2025Q4I' (instant, for balance-sheet items).
 Values are aligned to calendar periods by the SEC, so fiscal years that don't match the calendar map to the closest calendar period.`,
       inputSchema: {
-        concept: z.string().min(2).describe("Concept, e.g. 'us-gaap:Revenues', 'us-gaap:NetIncomeLoss', 'us-gaap:CashAndCashEquivalentsAtCarryingValue'."),
+        concept: z
+          .string()
+          .regex(/^(?:[A-Za-z][\w-]*:)?[A-Za-z]\w*$/, "Use a concept name such as 'us-gaap:Revenues' or 'Revenues'")
+          .max(200)
+          .describe("Concept, e.g. 'us-gaap:Revenues', 'us-gaap:NetIncomeLoss', 'us-gaap:CashAndCashEquivalentsAtCarryingValue'."),
         period: z.string().regex(/^CY\d{4}(Q[1-4]I?)?$/, "Use CY2025, CY2025Q4 or CY2025Q4I").describe("Calendar period."),
-        unit: z.string().default("USD").describe("Unit, e.g. 'USD', 'USD-per-shares', 'shares' (default USD)."),
+        unit: z
+          .string()
+          .regex(/^[A-Za-z0-9_]+(?:(?:\/|-per-)[A-Za-z0-9_]+)?$/, "Use a unit such as 'USD', 'shares' or 'USD/shares'")
+          .default("USD")
+          .describe("Unit, e.g. 'USD', 'USD/shares' (or 'USD-per-shares'), 'shares' (default USD)."),
         order: z.enum(["desc", "asc"]).default("desc").describe("Sort order (default largest first)."),
         limit: z.number().int().min(1).max(200).default(25).describe("How many companies to return (default 25)."),
         highlight: companyField.optional().describe("Also report this company's rank."),

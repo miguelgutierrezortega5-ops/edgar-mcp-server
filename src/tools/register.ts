@@ -3,7 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z, type ZodRawShape } from "zod";
 import { errorResult } from "../services/format.js";
 
-/** Register a read-only Fiscal.ai tool; thrown errors become actionable isError results. */
+/** Register a read-only tool; thrown errors become actionable isError results. */
 export function registerReadTool<S extends ZodRawShape>(
   server: McpServer,
   name: string,
