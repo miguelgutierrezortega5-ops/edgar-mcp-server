@@ -11,7 +11,7 @@ import { findSection } from "../dist/services/filings.js";
 import { diffHoldings, parseInfoTable } from "../dist/services/holdings.js";
 import { parseFredCsv, searchFred } from "../dist/services/macro.js";
 import { buildStatement } from "../dist/services/statements.js";
-import { parseForm4 } from "../dist/services/form4.js";
+import { form4IssuerCik, parseForm4 } from "../dist/services/form4.js";
 import { cached } from "../dist/services/http.js";
 import { getYieldCurve, parseYieldCsv } from "../dist/services/treasury.js";
 import { computeValuation, trailing } from "../dist/services/valuation.js";
@@ -177,6 +177,12 @@ describe("parseForm4", () => {
 
   test("lists every reporting owner", () => {
     assert.equal(parseForm4(form4({ owners: ["FUND A LP", "FUND B LLC"] }), "d", "u")[0].insider, "FUND A LP / FUND B LLC");
+  });
+
+  test("reads the issuer CIK, not a reporting owner's", () => {
+    const xml = form4({}).replace("<ownershipDocument>", "<ownershipDocument><issuer><issuerCik>0001234567</issuerCik><issuerName>TARGET CO</issuerName></issuer>").replace("<reportingOwnerId>", "<reportingOwnerId><rptOwnerCik>0001652044</rptOwnerCik>");
+    assert.equal(form4IssuerCik(xml), 1234567);
+    assert.equal(form4IssuerCik(form4({})), undefined);
   });
 });
 

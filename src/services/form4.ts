@@ -37,6 +37,12 @@ export interface Trade {
   url: string;
 }
 
+/** CIK of the company whose shares the filing reports (a filer's own Form 4 list also holds filings it made as an investor in other companies). */
+export function form4IssuerCik(xml: string): number | undefined {
+  const cik = Number(tag(blocks(xml, "issuer")[0] ?? "", "issuerCik"));
+  return Number.isFinite(cik) && cik > 0 ? cik : undefined;
+}
+
 export function parseForm4(xml: string, filed: string, url: string): Trade[] {
   const owners = blocks(xml, "reportingOwner");
   const names = owners.map((o) => tag(o, "rptOwnerName")).filter(Boolean);

@@ -1,5 +1,12 @@
 # Cambios
 
+## Sin publicar
+
+### Corregido
+
+- `edgar_get_insider_trades` ya no mezcla las operaciones que la empresa hace como inversora en otras compañías (p. ej. los fondos GV de Alphabet) con las de sus propios directivos.
+- `market_get_stock_price` muestra "–" en lugar de 0 cuando Yahoo no da el rango de 52 semanas.
+
 ## 1.1.0
 
 ### Nuevo

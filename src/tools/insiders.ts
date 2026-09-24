@@ -3,7 +3,7 @@ import { z } from "zod";
 import { companyField, resolveCompany } from "../services/companies.js";
 import { archiveUrl, getSubmissions, recentFilings } from "../services/filings.js";
 import { fmtNum, mdTable, render, responseFormatField } from "../services/format.js";
-import { parseForm4 } from "../services/form4.js";
+import { form4IssuerCik, parseForm4 } from "../services/form4.js";
 import { httpGet } from "../services/http.js";
 import { registerReadTool } from "./register.js";
 
@@ -34,6 +34,9 @@ Codes: P = open-market buy, S = open-market sale (the most informative); A = gra
           const url = archiveUrl(reg.cik, f.accessionNumber, xmlFile);
           try {
             const xml = await httpGet<string>("www", new URL(url).pathname, { as: "text", ttl: 24 * 60 * 60 * 1000 });
+            // Filings the company made as an investor in another company (e.g. Alphabet's GV funds) are not about its own shares.
+            const issuer = form4IssuerCik(xml);
+            if (issuer !== undefined && issuer !== Number(reg.cik)) return "other" as const;
             return parseForm4(xml, f.filingDate, url);
           } catch {
             return undefined;
@@ -41,12 +44,14 @@ Codes: P = open-market buy, S = open-market sale (the most informative); A = gra
         }),
       );
       const failed = parsed.filter((p) => p === undefined).length;
+      const asInvestor = parsed.filter((p) => p === "other").length;
       if (failed && failed === form4s.length) throw new Error(`Could not download any of ${s.name}'s last ${failed} Form 4 filings from the SEC. Try again shortly.`);
-      const trades = parsed.flatMap((p) => p ?? []).filter((t) => !open_market_only || t.code === "P" || t.code === "S");
+      const trades = parsed.flatMap((p) => (Array.isArray(p) ? p : [])).filter((t) => !open_market_only || t.code === "P" || t.code === "S");
       const sum = (code: string) => trades.filter((t) => t.code === code).reduce((a, t) => ({ n: a.n + 1, shares: a.shares + (t.shares ?? 0), value: a.value + (t.value ?? 0) }), { n: 0, shares: 0, value: 0 });
       const summary = {
-        filingsParsed: form4s.length - failed,
+        filingsParsed: form4s.length - failed - asInvestor,
         filingsFailed: failed,
+        filingsAsInvestor: asInvestor,
         from: form4s.at(-1)?.filingDate,
         to: form4s[0]?.filingDate,
         openMarketBuys: sum("P"),
@@ -56,7 +61,7 @@ Codes: P = open-market buy, S = open-market sale (the most informative); A = gra
         [
           `# ${d.company} — insider trades (Form 4)`,
           "",
-          `Parsed ${d.summary.filingsParsed} filings (${d.summary.from ?? "–"} → ${d.summary.to ?? "–"})${d.summary.filingsFailed ? `; ${d.summary.filingsFailed} could not be downloaded` : ""}.`,
+          `Parsed ${d.summary.filingsParsed} filings (${d.summary.from ?? "–"} → ${d.summary.to ?? "–"})${d.summary.filingsFailed ? `; ${d.summary.filingsFailed} could not be downloaded` : ""}${d.summary.filingsAsInvestor ? `; skipped ${d.summary.filingsAsInvestor} filed by ${d.company} as an investor in other companies` : ""}.`,
           `- **Open-market buys**: ${d.summary.openMarketBuys.n} trades, ${fmtNum(d.summary.openMarketBuys.shares)} shares, $${fmtNum(d.summary.openMarketBuys.value)}`,
           `- **Open-market sales**: ${d.summary.openMarketSales.n} trades, ${fmtNum(d.summary.openMarketSales.shares)} shares, $${fmtNum(d.summary.openMarketSales.value)}`,
           "",
