@@ -1,0 +1,56 @@
+{
+  "manifest_version": "0.3",
+  "name": "edgar-mcp-server",
+  "display_name": "SEC EDGAR · datos financieros",
+  "version": "1.1.0",
+  "description": "Datos financieros gratuitos y oficiales: estados financieros y filings de la SEC, insiders, carteras 13F, dividendos, precios, tipos del Tesoro y datos macro de FRED y el Banco Mundial.",
+  "long_description": "Servidor MCP con datos financieros **gratuitos y públicos**, sin suscripciones:\n\n- **SEC EDGAR**: estados financieros XBRL, métricas clave, filings (10-K, 10-Q, 8-K…), búsqueda de texto completo, operaciones de insiders (Form 4), carteras de fondos (13F) y rankings de todas las empresas.\n- **Mercado**: precios, dividendos, múltiplos de valoración, divisas e índices (Yahoo Finance, no oficial).\n- **Macro**: curva de tipos del Tesoro de EE. UU., más de 800.000 series de FRED (tipos, inflación, empleo, PIB…) e indicadores por país del Banco Mundial.\n\nIncluye plantillas de análisis en español: analizar una empresa, comparar empresas, DCF, resultados trimestrales, cartera de un inversor y panorama macro.",
+  "author": {
+    "name": "miguelgutierrezortega5-ops",
+    "url": "https://github.com/miguelgutierrezortega5-ops"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server"
+  },
+  "homepage": "https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server",
+  "documentation": "https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server#readme",
+  "support": "https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server/issues",
+  "license": "MIT",
+  "keywords": ["sec", "edgar", "finance", "stocks", "xbrl", "13f", "insider", "fred", "macro", "valuation", "dividends"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "SEC_USER_AGENT": "${user_config.sec_user_agent}",
+        "FRED_API_KEY": "${user_config.fred_api_key}"
+      }
+    }
+  },
+  "user_config": {
+    "sec_user_agent": {
+      "type": "string",
+      "title": "Tu nombre y email (para la SEC)",
+      "description": "La SEC exige que quien descarga sus datos se identifique con un nombre y un email, p. ej. \"Juan Pérez juan@correo.com\". No hace falta registrarse.",
+      "required": true
+    },
+    "fred_api_key": {
+      "type": "string",
+      "title": "Clave de API de FRED (opcional)",
+      "description": "Gratis en https://fredaccount.stlouisfed.org/apikeys. Solo sirve para buscar entre todas las series de FRED; los datos se descargan sin clave.",
+      "required": false,
+      "sensitive": true
+    }
+  },
+  "tools_generated": false,
+  "prompts_generated": true,
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}
