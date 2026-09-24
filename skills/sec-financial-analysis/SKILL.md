@@ -11,7 +11,7 @@ Workflows for company research with the `edgar_*` and `market_*` MCP tools. All 
 
 - **Identify the company first.** Tickers work directly; if ambiguous, call `edgar_search_companies`. Coverage is SEC filers only (US-listed companies plus foreign issuers filing 20-F/40-F). For others, say so instead of guessing.
 - **State the periods.** Every number needs its fiscal period (column headers are period end dates). Fiscal years differ between companies (e.g. MSFT ends June, AAPL September, NVDA January).
-- **Watch data freshness.** If `market_get_valuation` shows a ⚠️ staleness warning, mention it. For the newest quarter, the 8-K item 2.02 press release (`edgar_list_filings` with forms `["8-K"]`) is often ahead of XBRL data.
+- **Watch data freshness and caveats.** If `market_get_valuation` shows a ⚠️ warning (stale data, several share classes, foreign filer), mention it. If it refuses (ADR in another currency, no current share count), say why and use `edgar_get_key_metrics` + `market_get_stock_price` instead. For the newest quarter, the 8-K item 2.02 press release (`edgar_list_filings` with forms `["8-K"]`) is often ahead of XBRL data.
 - **Per-share caveat.** EPS and share counts are as reported and may not be split-adjusted across years. Check `edgar_get_concept` for splits or compare with share counts before computing per-share growth across a split.
 - **No investment advice.** Present the evidence, the bull and bear points, and the key uncertainties. Do not tell the user to buy or sell.
 - Answer in the user's language.

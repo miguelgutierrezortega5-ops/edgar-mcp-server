@@ -51,6 +51,20 @@ mkdir -p ~/.claude/skills && cp -r skills/sec-financial-analysis ~/.claude/skill
 TRANSPORT=http PORT=3000 SEC_USER_AGENT="Tu Nombre tu@email.com" npm start   # POST http://127.0.0.1:3000/mcp
 ```
 
+Por defecto escucha solo en `127.0.0.1` y rechaza peticiones con otra cabecera `Host` (protección contra *DNS rebinding*). Para exponerlo en la red:
+
+| Variable | Para qué |
+| --- | --- |
+| `HOST` | Interfaz de escucha, p. ej. `0.0.0.0` |
+| `MCP_AUTH_TOKEN` | Exige `Authorization: Bearer <token>` en cada petición. **Recomendado** fuera de localhost |
+| `ALLOWED_HOSTS` | Nombres de host aceptados, separados por comas, p. ej. `mcp.midominio.com` |
+
+### Otras variables
+
+| Variable | Por defecto | Para qué |
+| --- | --- | --- |
+| `EDGAR_CACHE_MAX_MB` | `100` | Tamaño máximo de la caché de respuestas (los datos XBRL de una empresa grande ocupan 5-8 MB) |
+
 ## Herramientas (15)
 
 | Herramienta | Qué hace |
@@ -78,11 +92,13 @@ TRANSPORT=http PORT=3000 SEC_USER_AGENT="Tu Nombre tu@email.com" npm start   # P
 - Las columnas son fechas de cierre de periodo. Cada empresa tiene su propio año fiscal.
 - El EPS y el número de acciones son los reportados en su momento, y pueden no estar ajustados por splits posteriores.
 - El conjunto XBRL de la SEC puede ir unos días o semanas por detrás de los filings. `market_get_valuation` avisa cuando es así.
+- `market_get_valuation` usa los últimos 4 trimestres consecutivos (TTM) o, si falta alguno, el último año fiscal. No calcula múltiplos cuando los datos están en otra moneda que el precio (ADRs como TSM o NVO) ni cuando no hay un número de acciones actual (p. ej. Berkshire): en esos casos devuelve un error explicado en lugar de cifras engañosas.
 - Para respetar la política de la SEC, el servidor limita las peticiones a 8 por segundo, reintenta ante errores 429 y 5xx, y guarda en caché las respuestas grandes.
 - Los precios salen de un endpoint no oficial de Yahoo Finance, que podría dejar de funcionar. Todo lo demás son fuentes oficiales.
 
 ## Pruebas
 
 ```bash
-npm test   # ejecuta las 15 herramientas contra la SEC, el Tesoro y Yahoo reales (requiere internet)
+npm test            # pruebas unitarias, sin conexión (las mismas que ejecuta la CI de GitHub)
+npm run test:live   # ejecuta las 15 herramientas contra la SEC, el Tesoro y Yahoo reales (requiere internet)
 ```
