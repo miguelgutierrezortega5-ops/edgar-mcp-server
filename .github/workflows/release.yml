@@ -1,0 +1,31 @@
+name: Release
+
+# Push a tag such as v1.1.0 to build the Claude Desktop extension (.mcpb) and the skill zip
+# and attach them to a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Check the tag matches package.json
+        run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+      - run: npm run bundle
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/*.mcpb
+            build/sec-financial-analysis-skill.zip
+          generate_release_notes: true
