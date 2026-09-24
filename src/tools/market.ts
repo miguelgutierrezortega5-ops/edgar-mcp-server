@@ -79,8 +79,9 @@ Source: Yahoo Finance's public chart endpoint (unofficial; may occasionally be u
         currency: m.currency,
         price: m.regularMarketPrice,
         asOf: m.regularMarketTime ? new Date(m.regularMarketTime * 1000).toISOString() : undefined,
-        week52High: m.fiftyTwoWeekHigh,
-        week52Low: m.fiftyTwoWeekLow,
+        // Yahoo reports 0 when it lacks the value (some indices and cross-listings).
+        week52High: m.fiftyTwoWeekHigh || undefined,
+        week52Low: m.fiftyTwoWeekLow || undefined,
         range,
         rangeReturn: first && last ? last.close / first.close - 1 : null,
         maxDrawdown: maxDd,
