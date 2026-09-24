@@ -1,4 +1,4 @@
-import { CACHE_MAX_CHARS, REQUEST_TIMEOUT_MS, SEC_MAX_REQUESTS_PER_SECOND } from "../constants.js";
+import { CACHE_MAX_CHARS, REPO_URL, REQUEST_TIMEOUT_MS, SEC_MAX_REQUESTS_PER_SECOND, VERSION } from "../constants.js";
 
 export class HttpError extends Error {
   constructor(
@@ -11,7 +11,7 @@ export class HttpError extends Error {
   }
 }
 
-export type Host = "data" | "www" | "efts" | "yahoo" | "treasury";
+export type Host = "data" | "www" | "efts" | "yahoo" | "treasury" | "fred" | "fredapi" | "worldbank";
 
 const HOSTS: Record<Host, string> = {
   data: "https://data.sec.gov",
@@ -19,7 +19,19 @@ const HOSTS: Record<Host, string> = {
   efts: "https://efts.sec.gov",
   yahoo: "https://query1.finance.yahoo.com",
   treasury: "https://home.treasury.gov",
+  fred: "https://fred.stlouisfed.org",
+  fredapi: "https://api.stlouisfed.org",
+  worldbank: "https://api.worldbank.org",
 };
+
+/** Descriptive client id; FRED's bot filter rejects generic ones such as "Mozilla/5.0" or Node's default. */
+const CLIENT_UA = `edgar-mcp-server/${VERSION} (+${REPO_URL})`;
+
+function userAgent(host: Host): string {
+  if (host === "data" || host === "www" || host === "efts") return secUserAgent();
+  if (host === "yahoo" || host === "treasury") return "Mozilla/5.0 (compatible; edgar-mcp-server)";
+  return CLIENT_UA;
+}
 
 /** Build a URL; EDGAR_MOCK_BASE redirects every host to a local mock (used by tests). */
 export function hostUrl(host: Host, pathAndQuery: string): string {
@@ -119,10 +131,7 @@ function backoffMs(attempt: number, retryAfter?: string | null): number {
 
 async function fetchBody(host: Host, url: string, as: "json" | "text"): Promise<string> {
   const isSec = host === "data" || host === "www" || host === "efts";
-  const headers: Record<string, string> = {
-    "User-Agent": isSec ? secUserAgent() : "Mozilla/5.0 (compatible; edgar-mcp-server)",
-    Accept: as === "json" ? "application/json" : "*/*",
-  };
+  const headers: Record<string, string> = { "User-Agent": userAgent(host), Accept: as === "json" ? "application/json" : "*/*" };
 
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {

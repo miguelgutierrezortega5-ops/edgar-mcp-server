@@ -1,4 +1,4 @@
-import { firstAvailable, type CompanyFacts, type PeriodKind, type Point } from "./xbrl.js";
+import { firstAvailable, reportingCurrency, type CompanyFacts, type PeriodKind, type Point } from "./xbrl.js";
 
 export type StatementType = "income" | "balance" | "cashflow";
 
@@ -69,8 +69,14 @@ export interface StatementTable {
   derivedQuarters: boolean;
 }
 
-export function loadLines(facts: CompanyFacts, defs: LineDef[], kind: PeriodKind): Map<string, { def: LineDef; series: Map<string, Point> }> {
-  return new Map(defs.map((d) => [d.key, { def: d, series: firstAvailable(facts, d.candidates, kind, d.unit) }]));
+/** Load line items; `currency` (default: the company's reporting currency) keeps every row in one currency. */
+export function loadLines(
+  facts: CompanyFacts,
+  defs: LineDef[],
+  kind: PeriodKind,
+  currency = reportingCurrency(facts),
+): Map<string, { def: LineDef; series: Map<string, Point> }> {
+  return new Map(defs.map((d) => [d.key, { def: d, series: firstAvailable(facts, d.candidates, kind, d.unit, currency) }]));
 }
 
 /** Pick the `max` most recent period ends from the anchor series (first line with data). */
@@ -81,10 +87,11 @@ export function selectPeriods(lines: { series: Map<string, Point> }[], max: numb
 }
 
 export function buildStatement(facts: CompanyFacts, type: StatementType, kind: PeriodKind, maxPeriods: number): StatementTable {
-  const lines = loadLines(facts, STATEMENTS[type], kind);
+  const reporting = reportingCurrency(facts);
+  const lines = loadLines(facts, STATEMENTS[type], kind, reporting);
   const periods = selectPeriods([...lines.values()], maxPeriods);
   let derivedQuarters = false;
-  let currency: string | undefined;
+  let currency: string | undefined = reporting;
   const rows: Row[] = [];
   for (const { def, series } of lines.values()) {
     const values = periods.map((p) => series.get(p)?.val ?? null);

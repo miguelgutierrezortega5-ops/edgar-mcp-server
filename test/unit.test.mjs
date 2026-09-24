@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { after, before, describe, test } from "node:test";
 
+import { readFileSync } from "node:fs";
+
+import { VERSION } from "../dist/constants.js";
+import { summarizeDividends } from "../dist/services/dividends.js";
 import { findSection } from "../dist/services/filings.js";
+import { diffHoldings, parseInfoTable } from "../dist/services/holdings.js";
+import { parseFredCsv, searchFred } from "../dist/services/macro.js";
+import { buildStatement } from "../dist/services/statements.js";
 import { parseForm4 } from "../dist/services/form4.js";
 import { cached } from "../dist/services/http.js";
 import { getYieldCurve, parseYieldCsv } from "../dist/services/treasury.js";
@@ -238,4 +245,108 @@ describe("findSection", () => {
     const loc = findSection(text, "risk_factors");
     assert.ok(text.slice(loc.start, loc.end).includes("Our business faces many risks"));
   });
+});
+
+describe("units and currencies", () => {
+  test("foreign filers read their home currency, not patchy USD convenience figures", () => {
+    const facts = {
+      cik: 2,
+      entityName: "Foreign Co",
+      facts: {
+        "ifrs-full": {
+          Revenue: {
+            units: {
+              TWD: [fact("2023-01-01", "2023-12-31", 2000, "20-F"), fact("2024-01-01", "2024-12-31", 2900, "20-F")],
+              USD: [fact("2024-01-01", "2024-12-31", 90, "20-F")],
+            },
+          },
+          CashAndCashEquivalents: { units: { TWD: [instant("2024-12-31", 1500, "20-F")], USD: [instant("2024-12-31", 47, "20-F")] } },
+        },
+      },
+    };
+    const t = buildStatement(facts, "income", "annual", 5);
+    assert.equal(t.currency, "TWD");
+    assert.deepEqual(t.rows.find((r) => r.key === "revenue").values, [2000, 2900]);
+    const b = buildStatement(facts, "balance", "annual", 5);
+    assert.deepEqual(b.rows.find((r) => r.key === "cash").values, [1500]);
+  });
+
+  test("US filers keep USD", () => {
+    const t = buildStatement(makeFacts({ Revenues: quarters(2025, [1, 2, 3, 4]) }), "income", "annual", 5);
+    assert.equal(t.currency, "USD");
+  });
+});
+
+describe("13F", () => {
+  const row = (issuer, cusip, value, shares, extra = "") =>
+    `<ns1:infoTable><ns1:nameOfIssuer>${issuer}</ns1:nameOfIssuer><ns1:titleOfClass>COM</ns1:titleOfClass><ns1:cusip>${cusip}</ns1:cusip><ns1:value>${value}</ns1:value>` +
+    `<ns1:shrsOrPrnAmt><ns1:sshPrnamt>${shares}</ns1:sshPrnamt><ns1:sshPrnamtType>SH</ns1:sshPrnamtType></ns1:shrsOrPrnAmt>${extra}</ns1:infoTable>`;
+  const table = (...rows) => `<ns1:informationTable xmlns:ns1="x">${rows.join("")}</ns1:informationTable>`;
+
+  test("merges rows of the same security and sorts by value", () => {
+    const h = parseInfoTable(table(row("APPLE INC", "037833100", 100, 10), row("AT&amp;T INC", "00206R102", 500, 50), row("APPLE INC", "037833100", 50, 5)));
+    assert.deepEqual(h.map((x) => [x.issuer, x.value, x.shares]), [["AT&T INC", 500, 50], ["APPLE INC", 150, 15]]);
+  });
+
+  test("keeps options apart from shares and scales pre-2023 values", () => {
+    const h = parseInfoTable(table(row("NVIDIA", "67066G104", 7, 1), row("NVIDIA", "67066G104", 3, 1, "<ns1:putCall>Put</ns1:putCall>")), 1000);
+    assert.equal(h.length, 2);
+    assert.equal(h[0].value, 7000);
+    assert.equal(h[1].putCall, "Put");
+  });
+
+  test("classifies changes versus the previous quarter", () => {
+    const prev = parseInfoTable(table(row("A", "1", 10, 10), row("B", "2", 10, 10), row("C", "3", 10, 10)));
+    const cur = parseInfoTable(table(row("A", "1", 20, 15), row("B", "2", 5, 5), row("D", "4", 1, 1)));
+    const { changes, exited } = diffHoldings(cur, prev);
+    assert.deepEqual(changes.map((c) => [c.holding.issuer, c.status, c.shareChange]), [["A", "added", 0.5], ["B", "reduced", -0.5], ["D", "new", null]]);
+    assert.deepEqual(exited.map((h) => h.issuer), ["C"]);
+  });
+});
+
+describe("FRED", () => {
+  test("parses fredgraph CSV with missing values", () => {
+    assert.deepEqual(parseFredCsv("observation_date,DGS10\n2026-09-04,4.78\n2026-09-07,\n2026-09-08,.\n"), [
+      { date: "2026-09-04", value: 4.78 },
+      { date: "2026-09-07", value: null },
+      { date: "2026-09-08", value: null },
+    ]);
+  });
+
+  test("rejects an HTML error page", () => {
+    assert.throws(() => parseFredCsv("<!DOCTYPE html><html>"));
+  });
+
+  test("catalog search works without an API key", async () => {
+    delete process.env.FRED_API_KEY;
+    const res = await searchFred("treasury yield", 10);
+    assert.equal(res.source, "catalog");
+    assert.ok(res.hits.some((h) => h.id === "DGS10"));
+  });
+});
+
+describe("dividends", () => {
+  const pay = (date, amount) => ({ date, amount });
+  test("TTM, yield, CAGR and streak", () => {
+    const payments = [];
+    for (let y = 2014; y <= 2025; y++) for (const m of ["03", "06", "09", "12"]) payments.push(pay(`${y}-${m}-15`, 0.25 * 1.05 ** (y - 2014)));
+    payments.push(pay("2026-03-15", 0.5));
+    const d = summarizeDividends(payments, 50, "2026-04-01");
+    assert.equal(d.paymentsPerYear, 4);
+    assert.ok(Math.abs(d.cagr5y - 0.05) < 1e-9);
+    assert.equal(d.consecutiveIncreases, 11);
+    assert.ok(Math.abs(d.ttm - (0.25 * 1.05 ** 11 * 3 + 0.5)) < 1e-9);
+    assert.ok(Math.abs(d.ttmYield - d.ttm / 50) < 1e-12);
+    assert.equal(d.annual.at(-1).partial, true);
+  });
+
+  test("a first partial year does not count as an increase", () => {
+    const d = summarizeDividends([pay("2024-06-10", 0.2), pay("2024-09-10", 0.2), pay("2025-03-10", 0.2), pay("2025-06-10", 0.2), pay("2025-09-10", 0.2), pay("2025-12-10", 0.2)], 10, "2026-01-15");
+    assert.equal(d.annual[0].partial, true);
+    assert.equal(d.consecutiveIncreases, 0);
+  });
+});
+
+test("VERSION matches package.json", () => {
+  assert.equal(VERSION, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
 });

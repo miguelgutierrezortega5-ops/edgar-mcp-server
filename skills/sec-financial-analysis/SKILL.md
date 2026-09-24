@@ -1,11 +1,11 @@
 ---
 name: sec-financial-analysis
-description: Fundamental equity analysis of US-listed companies using the edgar-mcp-server tools (SEC EDGAR filings and XBRL financials, Form 4 insider trades, Treasury yields, stock prices). Use when the user asks to analyze a stock or company, compare competitors, value a company (multiples or DCF), review earnings or a 10-K/10-Q/8-K, check insider buying/selling, or screen companies on a financial metric. Also triggers on Spanish requests such as "analiza la empresa", "compara", "valoración", "resultados trimestrales", "insiders".
+description: Fundamental equity and macro analysis using the edgar-mcp-server tools (SEC EDGAR filings and XBRL financials, Form 4 insider trades, 13F fund portfolios, dividends, stock prices, Treasury yields, FRED and World Bank economic data). Use when the user asks to analyze a stock or company, compare competitors, value a company (multiples or DCF), review earnings or a 10-K/10-Q/8-K, check insider buying/selling, see what a fund or famous investor holds, study dividends, screen companies on a financial metric, or review the economy (rates, inflation, jobs, recession risk). Also triggers on Spanish requests such as "analiza la empresa", "compara", "valoración", "resultados trimestrales", "insiders", "cartera de Buffett", "dividendos", "inflación", "tipos de interés".
 ---
 
 # SEC financial analysis
 
-Workflows for company research with the `edgar_*` and `market_*` MCP tools. All data is free and public. Always cite the period end dates and sources you used.
+Workflows for company and market research with the `edgar_*`, `market_*` and `macro_*` MCP tools. All data is free and public. Always cite the period end dates and sources you used.
 
 ## Ground rules
 
@@ -76,6 +76,25 @@ Output structure:
 
 - Use `edgar_full_text_search` with exact phrases in quotes, e.g. `"GLP-1"`, `"export controls"` or `"going concern"`. Filter by form and date.
 - Use it to find which companies mention a theme, then read the relevant passages with `edgar_read_filing` and `find`.
+
+## Workflow 8: Fund and investor portfolios (13F)
+
+- `edgar_get_institutional_holdings` with the manager's name (e.g. "Berkshire Hathaway", "Pershing Square Capital Management") or CIK. Pass `period` for an older quarter.
+- Report concentration (top 10 share), the biggest new positions and additions, and exits. Changes are in shares held, so price moves don't count as buying or selling.
+- Caveats: 13F is filed up to 45 days after quarter end, covers long US-listed positions only (no shorts, cash, bonds or foreign shares), and PUT/CALL rows show the value of the underlying shares, not the option premium.
+- For the ideas behind the top moves, look up each company with `edgar_search_companies` + `edgar_get_key_metrics`.
+
+## Workflow 9: Dividends
+
+- `market_get_dividends`: TTM yield, payments per year, 5/10-year CAGR, consecutive increases, yearly totals and splits.
+- Check sustainability with `edgar_get_key_metrics`: dividends paid vs free cash flow (`shareholder_returns`, `fcf`) and EPS. A payout above ~80% of FCF, or dividends funded with debt, deserves a warning.
+- Yearly totals are by payment date; a payment shifted across 31 December can make one year look like a cut.
+
+## Workflow 10: Macro backdrop
+
+- `macro_get_series` (FRED): rates (`FEDFUNDS`, `DGS2`, `DGS10`, `T10Y2Y`), inflation (`CPIAUCSL`, `PCEPILFE` with `transform: "pct_change_yoy"`), jobs (`UNRATE`, `PAYEMS`, `ICSA`), growth (`A191RL1Q225SBEA`), credit and risk (`BAMLH0A0HYM2`, `VIXCLS`), recession signals (`SAHMREALTIME`, `USREC`). Use `frequency: "monthly"` for long daily series. Find other IDs with `macro_search_series`.
+- `macro_get_country_indicator` (World Bank): annual GDP growth, inflation, unemployment, debt and more for any country, e.g. the markets a company sells in.
+- Tie macro to the company: rate sensitivity (debt, housing, banks), FX exposure for foreign revenue (`market_get_stock_price` with `EURUSD=X`, `MXN=X`), input costs (oil `DCOILWTICO`).
 
 ## Useful XBRL concepts beyond the standard statements
 

@@ -12,7 +12,7 @@ const periodField = z.enum(["annual", "quarterly"]).default("annual").describe("
 const maxPeriodsField = z.number().int().min(1).max(20).default(5).describe("Most recent N periods (1-20, default 5).");
 
 const SPLIT_NOTE = "EPS and share counts are as last reported for each period and may not reflect later stock splits.";
-const unitFmt = (unit: string) => (unit.includes("/shares") ? "per_share" : unit === "shares" ? "shares" : undefined);
+const unitFmt = (unit: string) => (unit === "per_share" || unit.includes("/shares") ? "per_share" : unit === "shares" ? "shares" : undefined);
 
 export function registerFinancialTools(server: McpServer): void {
   registerReadTool(
@@ -41,7 +41,11 @@ The cash flow statement includes free cash flow (CFO − capex). For any tag not
         return [
           `# ${facts.entityName} — ${title} (${period}, ${d.currency ?? "reported currency"})`,
           "",
-          mdTable(["Line item", ...d.periods], d.rows.map((r) => [r.label, ...r.values.map((v) => fmtNum(v, unitFmt(r.unit)))])),
+          mdTable(
+            ["Line item", ...d.periods],
+            // Flag the rare row only available in another currency than the statement's.
+            d.rows.map((r) => [unitFmt(r.unit) || !d.currency || r.unit === d.currency ? r.label : `${r.label} (${r.unit})`, ...r.values.map((v) => fmtNum(v, unitFmt(r.unit)))]),
+          ),
           "",
           `_Columns are period end dates. ${d.derivedQuarters ? "Some quarterly values are derived from year-to-date totals. " : ""}${statement === "income" ? SPLIT_NOTE : ""}_`,
         ].join("\n");

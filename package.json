@@ -1,7 +1,27 @@
 {
   "name": "edgar-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP server for free public financial data: SEC EDGAR (filings, XBRL financials, insider trades, full-text search), US Treasury yields and stock prices",
+  "version": "1.1.0",
+  "description": "MCP server for free public financial data: SEC EDGAR (financials, filings, insider trades, 13F portfolios, full-text search), stock prices and dividends, US Treasury yields, FRED and World Bank macro data",
+  "license": "MIT",
+  "author": "miguelgutierrezortega5-ops (https://github.com/miguelgutierrezortega5-ops)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server.git"
+  },
+  "homepage": "https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "sec",
+    "edgar",
+    "xbrl",
+    "finance",
+    "stocks",
+    "13f",
+    "fred",
+    "macro"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -11,7 +31,10 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "build": "tsc",
-    "clean": "rm -rf dist",
+    "prepare": "npm run build",
+    "clean": "rm -rf dist build",
+    "setup": "node scripts/setup.mjs",
+    "bundle": "npm run build && node scripts/bundle.mjs",
     "test": "npm run build && node --test test/unit.test.mjs",
     "test:live": "npm run build && node test/smoke.mjs"
   },
@@ -32,6 +55,9 @@
   "files": [
     "dist",
     "skills",
-    "README.md"
+    "scripts/setup.mjs",
+    "manifest.json",
+    "README.md",
+    "LICENSE"
   ]
 }

@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { companyField, resolveCompany, tickersForCik } from "../services/companies.js";
+import { summarizeDividends } from "../services/dividends.js";
 import { getSubmissions, recentFilings } from "../services/filings.js";
 import { fmtNum, mdTable, render, responseFormatField } from "../services/format.js";
 import { httpGet } from "../services/http.js";
@@ -15,13 +16,19 @@ interface Chart {
       meta: { symbol: string; currency?: string; longName?: string; exchangeName?: string; regularMarketPrice?: number; regularMarketTime?: number; fiftyTwoWeekHigh?: number; fiftyTwoWeekLow?: number; chartPreviousClose?: number };
       timestamp?: number[];
       indicators: { quote: { close: (number | null)[]; volume: (number | null)[] }[]; adjclose?: { adjclose: (number | null)[] }[] };
+      events?: {
+        dividends?: Record<string, { amount: number; date: number }>;
+        splits?: Record<string, { date: number; numerator: number; denominator: number; splitRatio?: string }>;
+      };
     }[] | null;
     error?: { description?: string } | null;
   };
 }
 
+/** `range` is a Yahoo range ('1y', '5y'...) or 'all'; Yahoo's own 'max' drops events for long histories, so 'all' asks for explicit dates. */
 async function getChart(symbol: string, range: string, interval: string): Promise<Chart["chart"]["result"] & object> {
-  const res = await httpGet<Chart>("yahoo", `/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&events=div,split`, { ttl: 5 * 60 * 1000 });
+  const span = range === "all" ? `period1=-2208988800&period2=${Math.floor(Date.now() / 3_600_000) * 3600}` : `range=${range}`;
+  const res = await httpGet<Chart>("yahoo", `/v8/finance/chart/${encodeURIComponent(symbol)}?${span}&interval=${interval}&events=div,split`, { ttl: 5 * 60 * 1000 });
   if (!res.chart.result?.length) throw new Error(`No price data for '${symbol}': ${res.chart.error?.description ?? "unknown symbol"}. Non-US listings need a Yahoo suffix (e.g. 'SAP.DE', 'MC.PA', 'SHOP.TO').`);
   return res.chart.result;
 }
@@ -40,7 +47,7 @@ export function registerMarketTools(server: McpServer): void {
     "market_get_stock_price",
     {
       title: "Get stock price history",
-      description: `Get the current price and price history for a ticker (any exchange: US tickers as-is, others with a Yahoo suffix like 'SAP.DE', 'MC.PA', 'SHOP.TO', '7203.T').
+      description: `Get the current price and price history for a ticker (any exchange: US tickers as-is, others with a Yahoo suffix like 'SAP.DE', 'MC.PA', 'SHOP.TO', '7203.T'), an index ('^GSPC', '^MXX') or an exchange rate ('EURUSD=X', 'MXN=X' for USD/MXN).
 Returns current price, 52-week range, return over the range, max drawdown, and a sampled price table (split/dividend-adjusted closes).
 Source: Yahoo Finance's public chart endpoint (unofficial; may occasionally be unavailable).`,
       inputSchema: {
@@ -91,6 +98,60 @@ Source: Yahoo Finance's public chart endpoint (unofficial; may occasionally be u
           "",
           "_Source: Yahoo Finance (unofficial). Adjusted for splits and dividends._",
         ].join("\n"),
+      );
+    },
+  );
+
+  registerReadTool(
+    server,
+    "market_get_dividends",
+    {
+      title: "Get dividend history",
+      description: `Get a stock's dividend and split history (any exchange; Yahoo symbols like 'KO', 'JNJ', 'SAN.MC', 'WALMEX.MX'): trailing-12-month dividend and yield, payments per year, 5- and 10-year dividend growth (CAGR), consecutive years of increases, yearly totals and splits.
+Amounts are split-adjusted per share in the listing's currency. For the payout ratio, compare with EPS or FCF per share from edgar_get_key_metrics.`,
+      inputSchema: {
+        symbol: z.string().min(1).max(20).describe("Ticker, e.g. 'KO', 'O', 'SAN.MC'."),
+        years: z.number().int().min(1).max(40).default(12).describe("Years of yearly totals to show (default 12)."),
+        response_format: responseFormatField,
+      },
+    },
+    async ({ symbol, years, response_format }) => {
+      const [r] = await getChart(symbol.toUpperCase(), "all", "1mo");
+      const toDate = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
+      const payments = Object.values(r.events?.dividends ?? {}).map((d) => ({ date: toDate(d.date), amount: d.amount }));
+      const splits = Object.values(r.events?.splits ?? {})
+        .map((sp) => ({ date: toDate(sp.date), ratio: sp.splitRatio ?? `${sp.numerator}:${sp.denominator}` }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+      const price = r.meta.regularMarketPrice;
+      const asOf = new Date().toISOString().slice(0, 10);
+      const summary = summarizeDividends(payments, price, asOf);
+      const data = {
+        symbol: r.meta.symbol,
+        name: r.meta.longName,
+        currency: r.meta.currency,
+        price,
+        ...summary,
+        annual: summary.annual.slice(-years),
+        lastPayments: [...payments].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8),
+        splits,
+      };
+      return render(response_format, data, (d) =>
+        payments.length
+          ? [
+              `# ${d.name ?? d.symbol} (${d.symbol}) — dividends (${d.currency ?? ""})`,
+              "",
+              `- **Trailing 12 months**: ${d.ttm.toFixed(4)} per share · yield **${fmtNum(d.ttmYield, "%")}** at ${d.price ?? "–"}`,
+              `- **Payments per year**: ${d.paymentsPerYear} · **5y CAGR** ${fmtNum(d.cagr5y, "%")} · **10y CAGR** ${fmtNum(d.cagr10y, "%")}`,
+              `- **Consecutive yearly increases**: ${d.consecutiveIncreases}`,
+              "",
+              mdTable(["Year", "Total", "Payments", "YoY"], d.annual.map((a, i, arr) => [`${a.year}${a.partial ? (a.year >= new Date().getUTCFullYear() ? " (to date)" : " (partial)") : ""}`, a.total.toFixed(4), a.payments, i && !a.partial && !arr[i - 1].partial && arr[i - 1].total ? fmtNum(a.total / arr[i - 1].total - 1, "%") : "–"])),
+              "",
+              `**Last payments**: ${d.lastPayments.map((p) => `${p.date}: ${p.amount.toFixed(4)}`).join(" · ")}`,
+              d.splits.length ? `**Splits**: ${d.splits.map((sp) => `${sp.date} ${sp.ratio}`).join(" · ")}` : "",
+              "",
+              "_Source: Yahoo Finance (unofficial). Split-adjusted; yearly totals by payment date, so a shifted payment can move between years._",
+            ].join("\n")
+          : `${d.name ?? d.symbol} (${d.symbol}) has paid no dividends in Yahoo's history.${d.splits.length ? ` Splits: ${d.splits.map((sp) => `${sp.date} ${sp.ratio}`).join(", ")}.` : ""}`,
       );
     },
   );

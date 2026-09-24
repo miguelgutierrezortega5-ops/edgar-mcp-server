@@ -58,12 +58,43 @@ export function findConcept(facts: CompanyFacts, name: string): { taxonomy: stri
   return undefined;
 }
 
-function pickUnit(concept: Concept, preferred?: string): string | undefined {
+/**
+ * The unit with the most recent data, then the most facts, then USD. Foreign filers tag their
+ * home currency for every year and USD convenience translations for a few, so preferring USD
+ * outright would pick a patchy series and mix currencies across line items.
+ */
+function bestUnit(concept: Concept, units: string[]): string | undefined {
+  const lastEnd = (u: string) => concept.units[u].reduce((m, f) => (f.end > m ? f.end : m), "");
+  return [...units].sort(
+    (a, b) => lastEnd(b).localeCompare(lastEnd(a)) || concept.units[b].length - concept.units[a].length || Number(b.startsWith("USD")) - Number(a.startsWith("USD")),
+  )[0];
+}
+
+/**
+ * Choose the unit series to read. `preferred` is a literal unit ('USD', 'EUR/shares'), or
+ * 'per_share' / 'shares'; `currency` asks for that currency when the concept has it, so all
+ * rows of a statement share one currency.
+ */
+export function pickUnit(concept: Concept, preferred?: string, currency?: string): string | undefined {
   const units = Object.keys(concept.units);
   if (preferred && units.includes(preferred)) return preferred;
-  if (preferred === "per_share") return units.find((u) => u.includes("/shares"));
   if (preferred === "shares") return units.find((u) => u === "shares");
-  return units.find((u) => u === "USD") ?? units.find((u) => !u.includes("/")) ?? units[0];
+  if (preferred === "per_share") {
+    const perShare = units.filter((u) => u.endsWith("/shares"));
+    return currency && perShare.includes(`${currency}/shares`) ? `${currency}/shares` : bestUnit(concept, perShare);
+  }
+  const money = units.filter((u) => !u.includes("/") && u !== "shares" && u !== "pure");
+  if (currency && money.includes(currency)) return currency;
+  return bestUnit(concept, money) ?? units[0];
+}
+
+/** Currency a company reports in: the unit chosen for its revenue, net income or total assets. */
+export function reportingCurrency(facts: CompanyFacts): string | undefined {
+  for (const name of ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "NetIncomeLoss", "Assets", "ifrs-full:Revenue", "ifrs-full:ProfitLoss", "ifrs-full:Assets"]) {
+    const found = findConcept(facts, name);
+    if (found) return pickUnit(found.concept);
+  }
+  return undefined;
 }
 
 const isAdditive = (unit: string) => unit !== "shares" && !unit.includes("/");
@@ -75,11 +106,11 @@ const isAdditive = (unit: string) => unit !== "shares" && !unit.includes("/");
  * In quarterly mode, quarters that are only reported year-to-date (typical for cash
  * flows and fiscal Q4) are derived by differencing consecutive YTD values.
  */
-export function conceptSeries(facts: CompanyFacts, name: string, kind: PeriodKind, unitPref?: string): Map<string, Point> {
+export function conceptSeries(facts: CompanyFacts, name: string, kind: PeriodKind, unitPref?: string, currency?: string): Map<string, Point> {
   const out = new Map<string, Point>();
   const found = findConcept(facts, name);
   if (!found) return out;
-  const unit = pickUnit(found.concept, unitPref);
+  const unit = pickUnit(found.concept, unitPref, currency);
   if (!unit) return out;
   const concept = `${found.taxonomy}:${found.tag}`;
 
@@ -132,15 +163,15 @@ const seriesMemo = new WeakMap<CompanyFacts, Map<string, Map<string, Point>>>();
  * Merge candidate concepts: for each period, the first candidate with a value wins.
  * The returned map is memoized and shared between callers: do not mutate it.
  */
-export function firstAvailable(facts: CompanyFacts, candidates: string[], kind: PeriodKind, unitPref?: string): Map<string, Point> {
+export function firstAvailable(facts: CompanyFacts, candidates: string[], kind: PeriodKind, unitPref?: string, currency?: string): Map<string, Point> {
   let memo = seriesMemo.get(facts);
   if (!memo) seriesMemo.set(facts, (memo = new Map()));
-  const key = `${kind}|${unitPref ?? ""}|${candidates.join(",")}`;
+  const key = `${kind}|${unitPref ?? ""}|${currency ?? ""}|${candidates.join(",")}`;
   const hit = memo.get(key);
   if (hit) return hit;
   const merged = new Map<string, Point>();
   for (const c of candidates) {
-    for (const [end, p] of conceptSeries(facts, c, kind, unitPref)) if (!merged.has(end)) merged.set(end, p);
+    for (const [end, p] of conceptSeries(facts, c, kind, unitPref, currency)) if (!merged.has(end)) merged.set(end, p);
   }
   memo.set(key, merged);
   return merged;

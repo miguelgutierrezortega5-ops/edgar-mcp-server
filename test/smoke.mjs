@@ -1,4 +1,4 @@
-// Live smoke test: calls every tool against the real SEC / Treasury / Yahoo endpoints.
+// Live smoke test: calls every tool against the real SEC, Treasury, Yahoo, FRED and World Bank endpoints.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -32,10 +32,16 @@ const calls = [
   ["market_get_stock_price", { symbol: "KO", range: "1y", max_points: 5 }],
   ["market_get_treasury_yields", {}],
   ["market_get_valuation", { company: "KO" }],
+  ["market_get_dividends", { symbol: "KO", years: 5 }],
+  ["edgar_get_institutional_holdings", { manager: "Berkshire Hathaway", limit: 5 }],
+  ["macro_get_series", { series_ids: ["DGS10", "DGS2"], start_date: "2025-01-01", frequency: "monthly", max_points: 6 }],
+  ["macro_search_series", { query: "unemployment" }],
+  ["macro_get_country_indicator", { countries: ["MX", "US"], indicator: "gdp_growth", start_year: 2020 }],
   // error paths
   ["edgar_get_company_info", { company: "zzzz-not-a-company" }],
   ["edgar_get_concept", { company: "MSFT", concept: "NotARealConcept" }],
   ["market_get_stock_price", { symbol: "NOTATICKERXYZ" }],
+  ["market_get_valuation", { company: "TSM" }], // ADR reporting in TWD: refuses rather than mix currencies
 ];
 const covered = new Set();
 let failures = 0;
@@ -44,7 +50,8 @@ for (const [name, args] of calls) {
   const r = await client.callTool({ name, arguments: args });
   covered.add(name);
   const text = r.content.map((c) => c.text).join("\n");
-  const expectError = name.includes("info") && args.company.startsWith("zzzz") || args.concept === "NotARealConcept" || args.symbol === "NOTATICKERXYZ";
+  const expectError =
+    (name.includes("info") && args.company.startsWith("zzzz")) || args.concept === "NotARealConcept" || args.symbol === "NOTATICKERXYZ" || (name === "market_get_valuation" && args.company === "TSM");
   if (Boolean(r.isError) !== expectError) failures++;
   console.log(`\n===== ${name} ${JSON.stringify(args)} ${r.isError ? "[isError]" : ""} (${Date.now() - t0} ms)\n${text.slice(0, 1400)}${text.length > 1400 ? `\n…(${text.length} chars)` : ""}`);
 }
