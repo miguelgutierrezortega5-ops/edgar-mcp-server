@@ -1,5 +1,25 @@
 # Cambios
 
+## Sin publicar
+
+### Skill `sec-financial-analysis`
+
+- **Conectores financieros**:
+  - usa Fiscal.ai, FMP, Alpha Vantage, TipRanks y EODHD si están conectados, en orden de coste;
+  - primero, este servidor y Fiscal.ai; después, FMP y Alpha Vantage (límite diario); al final, TipRanks y EODHD (pocas llamadas en sus planes gratuitos);
+  - nueva referencia `references/connectors.md` con qué fuente usar para cada dato y los límites verificados de cada plan.
+- **Empresas europeas**:
+  - datos de Fiscal.ai (claves `BMEX_ITX`, `XPAR_MC`…), resultados semestrales y moneda de cada empresa;
+  - diferencias US GAAP / IFRS;
+  - macro de la eurozona (BCE, IPCA, Bund, prima de riesgo italiana).
+- **Mercados fuera de EE. UU. y la UE** como factor secundario: nueva referencia `references/global-spillovers.md` con los canales de contagio, qué mirar por región y los símbolos verificados.
+- **Nuevos flujos**:
+  - transcripciones de llamadas de resultados;
+  - consenso de analistas;
+  - análisis técnico, opciones y sentimiento (solo si se piden);
+  - carteras, lista de seguimiento, memoria y entrega por Drive, Gmail o Calendar.
+- **DCF**: tasa libre de riesgo según la moneda (Bund para EUR), prima de riesgo por país de FMP y DCF de FMP como contraste.
+
 ## 1.1.0
 
 ### Nuevo

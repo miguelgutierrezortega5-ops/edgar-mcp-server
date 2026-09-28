@@ -81,6 +81,8 @@ La skill `sec-financial-analysis` enseña a Claude flujos de análisis completos
 1. Descarga `sec-financial-analysis-skill.zip` desde [Releases](https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server/releases).
 2. Súbela en **Configuración → Capacidades → Skills**.
 
+La skill también aprovecha otros conectores financieros si los tienes conectados en Claude (Fiscal.ai, FMP, Alpha Vantage, TipRanks, EODHD). Para cada dato usa primero la fuente gratuita y deja para el final las que tienen pocas llamadas (TipRanks y EODHD en sus planes gratuitos). Cubre empresas de EE. UU. y de Europa. Los mercados del resto del mundo (China, Japón, Reino Unido, Suiza, emergentes, petróleo) entran como factor secundario, en una sección breve de «efectos globales» cuando son relevantes. Sin esos conectores funciona igual, solo con este servidor.
+
 ## Primeros pasos
 
 Escribe en Claude, por ejemplo:
