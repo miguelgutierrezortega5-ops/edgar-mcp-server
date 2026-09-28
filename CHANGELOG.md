@@ -2,6 +2,12 @@
 
 ## Sin publicar
 
+### Claude Code en la web
+
+- `.mcp.json` y un hook `SessionStart`: en las sesiones en la nube el servidor `edgar` se instala, se compila y se conecta solo.
+- `scripts/mcp-launch.mjs` compila el servidor si falta `dist/` y comparte un bloqueo con el hook, para no arrancar con una compilación a medias.
+- `SEC_USER_AGENT` y `FRED_API_KEY` se leen de las variables del entorno.
+
 ### Skill `sec-financial-analysis`
 
 - **Conectores financieros**:

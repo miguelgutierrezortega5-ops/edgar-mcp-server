@@ -74,6 +74,14 @@ mkdir -p ~/.claude/skills && cp -r skills/sec-financial-analysis ~/.claude/skill
 }
 ```
 
+### Claude Code en la web (sesiones en la nube)
+
+El repositorio trae `.mcp.json` y un hook `SessionStart` (`.claude/`). Si abres una sesión de Claude Code en la web sobre este repositorio, el servidor `edgar` se instala, se compila y se conecta solo, sin configurar nada. `scripts/mcp-launch.mjs` compila el servidor si hace falta y evita arrancarlo mientras el hook lo está compilando.
+
+- **Tu contacto para la SEC:** añade la variable `SEC_USER_AGENT` («Tu Nombre tu@email.com») en el entorno de la nube (menú del entorno en la barra de título de la sesión → *Edit* → variables de entorno). Sin ella se usa un contacto genérico, que la SEC podría limitar.
+- **FRED (opcional):** añade `FRED_API_KEY` en el mismo sitio.
+- **En tu ordenador:** Claude Code te pedirá permiso para usar el servidor `edgar` del proyecto. Si ya lo configuraste con el instalador (con tu nombre y email), puedes rechazarlo y seguir con el tuyo.
+
 ### Skill de análisis en claude.ai o Claude Desktop
 
 La skill `sec-financial-analysis` enseña a Claude flujos de análisis completos (empresa, comparación, DCF, resultados, insiders, 13F, dividendos, macro). Para usarla en claude.ai o Claude Desktop:
