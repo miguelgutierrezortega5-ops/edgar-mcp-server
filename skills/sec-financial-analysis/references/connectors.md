@@ -11,7 +11,7 @@ The limits below were measured in September 2026 on free or basic plans. Other u
 | Segments, geographic revenue, company KPIs | Fiscal.ai `company_segments_and_kpis` | TipRanks `get_company_kpis` | — |
 | Filings and their text | `edgar_read_filing`, `edgar_full_text_search` (US) | Fiscal.ai `company_filings`, `filing_page_image` (EU) | — |
 | Earnings call transcripts | Fiscal.ai `company_ir_events` → `company_ir_events_transcript` | Alpha Vantage `EARNINGS_CALL_TRANSCRIPT` | TipRanks `get_earnings_call_summary` |
-| Prices: US, EU, indices, FX, futures | `market_get_stock_price` (Yahoo symbols) | FMP `quote` / `chart` (US only); Alpha Vantage `GLOBAL_QUOTE` | EODHD `get_historical_stock_prices` (EOD) |
+| Prices: US, EU, indices, FX, futures | `market_get_stock_price` (Yahoo symbols) | FMP `quote` / `chart` (US stocks only), `indexes` → `index-quote` (world indices: `^GSPC`, `^STOXX50E`, `^N225`, `^HSI`…), `forex`, `commodity`; Alpha Vantage `GLOBAL_QUOTE` | EODHD `get_historical_stock_prices` (EOD) |
 | Dividends | `market_get_dividends` | FMP `calendar` (`dividends-company`); Alpha Vantage `DIVIDENDS` | TipRanks `get_dividend_history` |
 | Valuation multiples | `market_get_valuation` (US); Fiscal.ai `company_ratios`, `company_daily_ratios` | FMP `key-metrics-ttm`, `enterprise-values` | — |
 | Analyst consensus and price targets | — | FMP `analyst` (`price-target-consensus`, `grades-summary`, US); Alpha Vantage `EARNINGS_ESTIMATES` | TipRanks `get_assets_data` (batch), `get_recent_analyst_ratings` |
@@ -20,8 +20,9 @@ The limits below were measured in September 2026 on free or basic plans. Other u
 | 13F: fund portfolios and holders of a stock | `edgar_get_institutional_holdings`; Fiscal.ai `holder_institutional_holdings`, `company_institutional_holders` | — (FMP 13F needs Ultimate) | TipRanks `get_hedge_fund_activity` |
 | What investors write | Fiscal.ai `company_fund_letters`, `fund_letters` | — | TipRanks `get_blogger_sentiment` |
 | News | Fiscal.ai `company_news_summary`, `company_news`, `top_news` | FMP `news`; Alpha Vantage `NEWS_SENTIMENT` | TipRanks `get_stock_catalyst`, `get_assets_news` |
-| US macro | `macro_get_series` (FRED), `market_get_treasury_yields` | FMP `economics` (`treasury-rates`, `economics-calendar`); Alpha Vantage macro tools | TipRanks `get_economic_calendar` |
-| EU and world macro | `macro_get_series` (FRED international IDs), `macro_get_country_indicator` (World Bank) | FMP `economics` | — |
+| US macro | `macro_get_series` (FRED), `market_get_treasury_yields` | Alpha Vantage `TREASURY_YIELD`, `FEDERAL_FUNDS_RATE`, `CPI`, `UNEMPLOYMENT`… | — |
+| Economic data calendar | Web search | — (FMP `economics-calendar` needs Starter) | TipRanks `get_economic_calendar` |
+| EU and world macro | `macro_get_series` (FRED international IDs), `macro_get_country_indicator` (World Bank) | — | — |
 | Country risk and equity risk premium | — | FMP `economics` (`market-risk-premium`, every country) | EODHD credit tools (paid plan only) |
 | Commodities | `macro_get_series` (`DCOILBRENTEU`, `PCOPPUSDM`…); `market_get_stock_price` (`BZ=F`, `HG=F`, `TTF=F`) | Alpha Vantage `BRENT`, `WTI`, `COPPER`, `NATURAL_GAS`…; FMP `commodity` | TipRanks `get_commodity_quote` |
 | Technical indicators | Compute from `market_get_stock_price` history | Alpha Vantage (`RSI`, `MACD`, `BBANDS`, `SMA`…) | TipRanks `get_technical_analysis` |
@@ -60,9 +61,10 @@ The limits below were measured in September 2026 on free or basic plans. Other u
   - `quote` for US symbols;
   - `statements` (incl. `key-metrics-ttm`, `metrics-ratios-ttm`, `revenue-geographic-segments`);
   - `analyst` (`price-target-consensus`, `grades-summary`, `financial-estimates`);
-  - `calendar`, `economics` (`market-risk-premium`, `treasury-rates`, `economics-calendar`);
+  - `indexes` → `index-quote` for world indices (`^GSPC`, `^STOXX50E`, `^N225`, `^HSI`), `forex` (`EURUSD`…), `commodity` (`BZUSD` Brent…);
+  - `calendar`, `economics` → `market-risk-premium`;
   - `discountedCashFlow`, `news`, `insiderTrades`, `senate`, `company`.
-- **Refused on this plan:** non-US symbols (e.g. `ITX.MC`), `search` (screener and name search), `technicalIndicators`, `earningsTranscript`, `form13F`, `ESG`, `commitmentOfTraders` and `tipranks`.
+- **Refused on this plan:** non-US stocks (e.g. `ITX.MC`), yield indices (`^TNX`), `economics-calendar`, `search` (screener and name search), `technicalIndicators`, `earningsTranscript`, `form13F`, `ESG`, `commitmentOfTraders` and `tipranks`.
 - **Quirks:**
   - `financial-estimates` lists the furthest fiscal year first. Request several with `limit` and pick the years you need.
   - `revenue-geographic-segments` is often coarse (e.g. "US / Non US"); Fiscal.ai segments are usually finer.

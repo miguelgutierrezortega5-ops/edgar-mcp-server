@@ -140,7 +140,7 @@ Output structure:
   - `IRLTLT01DEM156N` and `IRLTLT01ITM156N`: German and Italian 10-year yields. The Italy − Germany spread is the euro-area stress gauge.
   - `DEXUSEU`: USD per euro.
   - Indices: `^STOXX50E`, `^STOXX`, `^GDAXI`, `^FCHI`, `^IBEX`, `FTSEMIB.MI` via `market_get_stock_price`.
-- **Calendars.** FMP `economics` (`economics-calendar`) for data releases; Fiscal.ai `events_calendar` (filter by `country`) or FMP `calendar` for earnings dates.
+- **Calendars.** For earnings dates, use Fiscal.ai `events_calendar` (filter by `country`) or FMP `calendar`. For economic data releases, FMP's `economics-calendar` needs a paid plan: use a web search, or TipRanks `get_economic_calendar` (scarce).
 - **Rest of the world** is the secondary layer: see `references/global-spillovers.md`. Use `macro_get_country_indicator` (World Bank) for annual structural data on any country.
 - **Tie macro to the holding:** rate sensitivity (debt, housing, banks), FX exposure of foreign revenue, and input costs (energy, metals).
 
