@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { backtest } from "./backtest.js";
+import { simulate } from "./backtest.js";
 import type { Config } from "./config.js";
 import { rateFunction, type FxRates } from "./data/source.js";
 import { referenceMarket, STRATEGIES, strategyOf } from "./strategy.js";
@@ -133,17 +133,16 @@ export async function learn(o: LearnOptions): Promise<LearnState> {
     state.from = Math.min(state.from, from);
     state.split = split;
 
-    const run = (overrides: StrategyParams, tradeFrom: number, tradeUntil?: number) =>
-      stats(
-        data.flatMap(({ market, candles, rateAt }) => {
-          const m = { ...market, strategy: { ...market.strategy, ...overrides } };
-          try {
-            return backtest({ market: m, candles, risk: config.risk, costs: config.paper, startingBalance: config.paper.startingBalance, rateAt, tradeFrom, tradeUntil, context: { reference } }).trades;
-          } catch {
-            return [];
-          }
-        }),
-      );
+    // One shared account for the group, as in live trading: the position limit and the protections
+    // decide which of a dozen simultaneous signals get traded.
+    const run = (overrides: StrategyParams, tradeFrom: number, tradeUntil?: number) => {
+      try {
+        const series = data.map(({ market, candles, rateAt }) => ({ market: { ...market, strategy: { ...market.strategy, ...overrides } }, candles, rateAt, context: { reference } }));
+        return stats(simulate({ series, risk: config.risk, costs: config.paper, startingBalance: config.paper.startingBalance, tradeFrom, tradeUntil, protections: config.protections }).trades);
+      } catch {
+        return stats([]);
+      }
+    };
 
     const impl = STRATEGIES[markets[0].strategyName];
     const candidates = combinations(impl.grid).filter((c) => !impl.validate({ ...markets[0].strategy, ...c }));

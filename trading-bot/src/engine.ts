@@ -2,7 +2,8 @@ import type { Broker } from "./brokers/broker.js";
 import type { Config } from "./config.js";
 import { quoteRate, type CandleSource, type FxRates } from "./data/source.js";
 import * as fmt from "./fmt.js";
-import type { Notifier } from "./notify.js";
+import type { Command, Notifier } from "./notify.js";
+import { blocked, onClose } from "./protections.js";
 import { averageBarValue, canOpen, newRiskState, positionSize, updateRisk } from "./risk.js";
 import { checkStops, trailStop, type Bar } from "./stops.js";
 import type { BotState, Store } from "./store.js";
@@ -23,7 +24,11 @@ export interface BotDeps {
   now?: () => number;
   /** Runs before each round (the learner hooks in here). */
   beforeTick?: () => Promise<void>;
+  /** Pending remote commands (Telegram). */
+  commands?: () => Promise<Command[]>;
 }
+
+export const COMMAND_HELP = "/estado — saldo, posiciones y pausas\n/pausa — no abrir operaciones nuevas\n/reanudar — quitar pausas y paradas por pérdidas\n/cerrar SIMBOLO|todo — cerrar a mercado\n/ayuda";
 
 const MAX_RECENT_TRADES = 100;
 
@@ -39,7 +44,7 @@ export class Bot {
   private readonly marks = new Map<string, PriceMark>();
   private readonly equity = new Map<string, number>();
   private readonly errors = new Map<string, number>();
-  private readonly marketById: Map<string, Market>;
+  private marketById: Map<string, Market>;
   private readonly now: () => number;
 
   constructor(private readonly d: BotDeps) {
@@ -90,6 +95,69 @@ export class Bot {
     return merged;
   }
 
+  /** Replace the market list (dynamic pairs); markets with open positions stay until they close. */
+  async setMarkets(markets: Market[]): Promise<string[]> {
+    const ids = new Set(markets.map((m) => m.id));
+    const keep = this.d.markets.filter((m) => !ids.has(m.id) && this.state.positions.some((p) => p.marketId === m.id));
+    const next = [...markets, ...keep];
+    const added = next.filter((m) => !this.marketById.has(m.id)).map((m) => m.id);
+    const removed = this.d.markets.filter((m) => !next.some((x) => x.id === m.id)).map((m) => m.id);
+    this.d.markets = next;
+    this.marketById = new Map(next.map((m) => [m.id, m]));
+    if (added.length) for (const [broker, ms] of this.brokerGroups()) await broker.init(ms);
+    return [...added.map((id) => `+ ${id}`), ...removed.map((id) => `- ${id}`)];
+  }
+
+  private async handleCommands(now: number): Promise<void> {
+    for (const c of (await this.d.commands?.()) ?? []) {
+      let reply: string;
+      if (c.name === "pausa") {
+        this.state.manualPause = true;
+        reply = "⏸️ Pausa manual: no abriré operaciones nuevas. Las abiertas siguen gestionadas. /reanudar para seguir.";
+      } else if (c.name === "reanudar") {
+        this.state.manualPause = false;
+        this.state.protections.pausedUntil = 0;
+        for (const r of Object.values(this.state.risk)) {
+          r.halted = null;
+          r.peakEquity = 0;
+        }
+        reply = "▶️ Trading reanudado.";
+      } else if (c.name === "cerrar") {
+        const target = (c.args[0] ?? "").toUpperCase();
+        const hits = this.state.positions.filter((p) => target === "TODO" || p.symbol === target || p.symbol.split("/")[0] === target);
+        for (const p of hits) {
+          const m = this.marketById.get(p.marketId);
+          const mark = this.marks.get(p.marketId);
+          if (m && mark) await this.closePosition(p, m, "cierre manual (Telegram)", mark.price, now);
+        }
+        reply = hits.length ? `Cerradas ${hits.length} posiciones.` : `No hay posiciones en ${target || "(falta el símbolo)"}.`;
+      } else if (c.name === "estado") reply = this.summary(now);
+      else reply = COMMAND_HELP;
+      this.d.log(`Telegram /${c.name}: ${reply.split("\n")[0]}`);
+      await this.d.notify(reply);
+    }
+  }
+
+  private summary(now: number): string {
+    const ccy = this.d.config.accountCurrency;
+    const lines = [...this.equity].map(([name, v]) => `💰 ${name}: ${fmt.money(v, ccy)}`);
+    for (const p of this.state.positions) {
+      const mark = this.marks.get(p.marketId);
+      const change = mark ? ((mark.price - p.entryPrice) / p.entryPrice) * 100 * (p.side === "long" ? 1 : -1) : NaN;
+      lines.push(`• ${p.symbol} ${fmt.side(p.side)} ${fmt.pct(change)} (stop ${fmt.price(p.stop)})`);
+    }
+    if (!this.state.positions.length) lines.push("Sin posiciones abiertas.");
+    const day = new Date(now).toISOString().slice(0, 10);
+    const today = this.state.recentTrades.filter((t) => new Date(t.closedAt).toISOString().startsWith(day));
+    lines.push(`Hoy: ${today.length} operaciones cerradas, ${fmt.money(today.reduce((a, t) => a + t.pnl, 0), ccy)}`);
+    const paused = this.d.markets.filter((m) => m.paused).length;
+    lines.push(`${this.d.markets.length} mercados vigilados, ${paused} en pausa por el aprendizaje.`);
+    if (this.state.manualPause) lines.push("⏸️ Pausa manual activa.");
+    if (now < this.state.protections.pausedUntil) lines.push(`🛡️ Pausa por racha de stop-loss hasta ${fmt.time(this.state.protections.pausedUntil)} UTC.`);
+    for (const [name, r] of Object.entries(this.state.risk)) if (r.halted) lines.push(`⛔ ${name}: ${r.halted}`);
+    return lines.join("\n");
+  }
+
   async tick(): Promise<void> {
     const now = this.now();
     const fresh = new Map<string, Candle[]>();
@@ -124,6 +192,12 @@ export class Bot {
         this.equity.delete(broker.name);
         await this.fail(broker.name, err);
       }
+    }
+
+    try {
+      await this.handleCommands(now);
+    } catch (err) {
+      await this.fail("telegram", err);
     }
 
     for (const m of this.d.markets) {
@@ -227,12 +301,15 @@ export class Bot {
   private async tryOpen(m: Market, broker: Broker, entry: Entry, mark: PriceMark, now: number, closed: Candle[]): Promise<void> {
     const label = `${m.id}: señal ${fmt.side(entry.side)}`;
     if (m.paused) return this.d.log(`${label} ignorada: mercado en pausa (${m.paused})`);
+    if (this.state.manualPause) return this.d.log(`${label} ignorada: pausa manual (/reanudar para seguir)`);
     const equity = this.equity.get(broker.name);
     if (equity === undefined) return this.d.log(`${label} ignorada: no se pudo valorar la cuenta ${broker.name}`);
     const risk = (this.state.risk[broker.name] ??= newRiskState(equity, now));
     const open = this.state.positions.filter((p) => p.broker === broker.name).length;
     const check = canOpen(risk, this.d.config.risk, equity, open);
     if (!check.ok) return this.d.log(`${label} ignorada: ${check.reason}`);
+    const guard = blocked(this.state.protections, m.id, now);
+    if (guard) return this.d.log(`${label} ignorada: ${guard}`);
 
     const size = positionSize({
       equity,
@@ -280,9 +357,15 @@ export class Bot {
     this.state.positions = this.state.positions.filter((p) => p.id !== t.id);
     this.state.recentTrades = [...this.state.recentTrades, t].slice(-MAX_RECENT_TRADES);
     this.d.store.appendTrade(t);
+    const m = this.marketById.get(t.marketId);
+    const tripped = onClose(this.state.protections, this.d.config.protections, t.marketId, t.reason, this.now(), m ? TIMEFRAME_MS[m.timeframe] : 60_000);
     const msg = `${t.pnl >= 0 ? "✅" : "🔴"} ${t.broker}: cierro ${fmt.side(t.side)} en ${t.symbol} a ${fmt.price(t.exitPrice)} (${t.reason}) — resultado ${fmt.money(t.pnl, this.d.config.accountCurrency)}`;
     this.d.log(msg);
     await this.d.notify(msg);
+    if (tripped) {
+      this.d.log(`🛡️ ${tripped}`);
+      await this.d.notify(`🛡️ ${tripped}`);
+    }
   }
 
   private describe(m: Market, sig: Signal, mark: PriceMark, pos: Position | undefined): string {

@@ -1,5 +1,6 @@
 import { unrealized } from "./brokers/broker.js";
 import { PaperAccount, paperUnits, type PaperCosts } from "./brokers/paper.js";
+import { blocked, newProtectionState, onClose, type ProtectionParams } from "./protections.js";
 import { averageBarValue, canOpen, newRiskState, positionSize, updateRisk, type RiskParams } from "./risk.js";
 import { checkStops, trailStop } from "./stops.js";
 import { minCandles, signals, type Signal } from "./strategy.js";
@@ -7,138 +8,221 @@ import type { StrategyContext } from "./strategies/types.js";
 import { TIMEFRAME_MS } from "./timeframes.js";
 import type { Candle, ClosedTrade, Market, Position } from "./types.js";
 
-export interface BacktestOptions {
+export interface SeriesInput {
   market: Market;
   candles: Candle[];
+  /** Quote-to-account rate at a given price of the market. */
+  rateAt: (price: number) => number;
+  context?: StrategyContext;
+}
+
+export interface PortfolioOptions {
+  series: SeriesInput[];
   risk: RiskParams;
   costs: PaperCosts;
   startingBalance: number;
-  /** Quote-to-account rate at a given price of the market. */
-  rateAt: (price: number) => number;
   /** Trade only from this time on; earlier bars just warm up the indicators. */
   tradeFrom?: number;
   /** Stop trading at this time (bars after it are ignored). */
   tradeUntil?: number;
-  context?: StrategyContext;
+  protections?: ProtectionParams;
 }
 
-export interface BacktestResult {
+export interface MarketSummary {
   market: Market;
+  trades: ClosedTrade[];
   from: number;
   to: number;
   bars: number;
+  exposurePct: number;
+  buyHoldPct: number;
+}
+
+export interface PortfolioResult {
   trades: ClosedTrade[];
+  markets: MarketSummary[];
+  from: number;
+  to: number;
   startEquity: number;
   endEquity: number;
   returnPct: number;
-  buyHoldPct: number;
   maxDrawdownPct: number;
   winRatePct: number;
   profitFactor: number;
   fees: number;
-  exposurePct: number;
   halted: string | null;
+  /** Entries skipped because of the open-position limit or the protections. */
+  skipped: number;
+}
+
+// Bars of all series merged by time, computed once per set of series (the learner replays it hundreds of times).
+const timelines = new WeakMap<Candle[], { key: string; steps: [number, number][][] }>();
+
+function timeline(series: SeriesInput[]): [number, number][][] {
+  const key = series.map((s) => `${s.market.id}:${s.candles.length}`).join("|");
+  const hit = timelines.get(series[0].candles);
+  if (hit && hit.key === key) return hit.steps;
+  const byTime = new Map<number, [number, number][]>();
+  series.forEach((s, k) => s.candles.forEach((c, i) => (byTime.get(c.time) ?? byTime.set(c.time, []).get(c.time)!).push([k, i])));
+  const steps = [...byTime.keys()].sort((a, b) => a - b).map((t) => byTime.get(t)!);
+  timelines.set(series[0].candles, { key, steps });
+  return steps;
 }
 
 /**
- * Replays the live rules bar by bar: signals are computed at a bar's close and executed at the
- * next bar's open; stops and take-profits fill at their level (or at the open on a gap), with
- * the stop assumed first when a bar touches both; time stops close at the bar's close.
+ * Replays the live rules on several markets at once with one shared account, as the paper broker
+ * does: the open-position limit, the risk limits and the protections apply across markets, so a
+ * crash that fires a dozen coins at once is traded only up to the limits. Signals are computed at
+ * a bar's close and executed at the next bar's open; stops and take-profits fill at their level (or
+ * at the open on a gap), the stop first when a bar touches both; time stops close at the bar's close.
  */
-export function backtest(o: BacktestOptions): BacktestResult {
-  const { market } = o;
-  const { candles } = o;
-  // Keep the same array (its indicators are cached across runs) and stop the replay at tradeUntil.
-  const endIdx = o.tradeUntil === undefined ? candles.length : candles.findIndex((c) => c.time >= o.tradeUntil!);
-  const end = endIdx < 0 ? candles.length : endIdx;
-  const p = market.strategy;
-  const step = TIMEFRAME_MS[market.timeframe];
+export function simulate(o: PortfolioOptions): PortfolioResult {
   const book = { balance: o.startingBalance, nextId: 1 };
   const account = new PaperAccount(book, o.costs, "backtest");
-  const start = candles.findIndex((c) => c.time >= (o.tradeFrom ?? -Infinity));
-  const first = start < 0 ? -1 : Math.max(minCandles(market) - 1, start);
-  if (first < 0 || first >= end - 1) throw new Error(`${market.id}: historial insuficiente para el backtest (${candles.length} velas)`);
-  const sigs = signals(market, candles, first, o.context, end);
-  const replay = candles.slice(0, end);
-
-  const risk = newRiskState(o.startingBalance, replay[first].time);
+  const prot = newProtectionState();
+  const S = o.series.map((s) => {
+    const { candles, market } = s;
+    const endIdx = o.tradeUntil === undefined ? candles.length : candles.findIndex((c) => c.time >= o.tradeUntil!);
+    const end = endIdx < 0 ? candles.length : endIdx;
+    const start = candles.findIndex((c) => c.time >= (o.tradeFrom ?? -Infinity));
+    const first = start < 0 ? -1 : Math.max(minCandles(market) - 1, start);
+    const ok = first >= 0 && first < end - 1;
+    return {
+      ...s,
+      step: TIMEFRAME_MS[market.timeframe],
+      first,
+      end,
+      ok,
+      sigs: ok ? signals(market, candles, first, s.context, end) : [],
+      pos: null as Position | null,
+      pending: null as Signal | null,
+      lastClose: NaN,
+      trades: [] as ClosedTrade[],
+      inMarket: 0,
+    };
+  });
+  const live = S.filter((s) => s.ok);
+  if (!live.length) throw new Error(`historial insuficiente para el backtest (${o.series.map((s) => `${s.market.id}: ${s.candles.length} velas`).join(", ")})`);
+  const t0 = Math.min(...live.map((s) => s.candles[s.first].time));
+  const risk = newRiskState(o.startingBalance, t0);
   const trades: ClosedTrade[] = [];
-  let pos: Position | null = null;
-  let pending: Signal | null = null;
   let peak = o.startingBalance;
   let maxDrawdown = 0;
-  let barsInMarket = 0;
-  const close = (reason: string, price: number, time: number) => {
-    trades.push(account.close(pos!, { market, reason, price, rate: o.rateAt(price), time }));
-    pos = null;
-  };
+  let skipped = 0;
+  let open = 0;
 
-  for (let i = first; i < replay.length; i++) {
-    const bar = replay[i];
-    if (pending) {
-      const sig: Signal = pending;
-      pending = null;
-      if (pos && ((pos.side === "long" && sig.exitLong) || (pos.side === "short" && sig.exitShort))) close("señal de salida", bar.open, bar.time);
-      if (!pos && sig.entry && canOpen(risk, o.risk, book.balance, 0).ok) {
-        const rate = o.rateAt(bar.open);
-        const size = positionSize({
-          equity: book.balance,
-          price: bar.open,
-          stopDistance: sig.entry.stopDistance,
-          rate,
-          type: market.type,
-          params: o.risk,
-          barValue: averageBarValue(replay.slice(Math.max(0, i - 50), i)),
-        });
-        const units = paperUnits(market, size);
-        if (units > 0) {
-          const opened = account.open({ market, side: sig.entry.side, units, price: bar.open, rate, stopDistance: sig.entry.stopDistance, takeProfitDistance: sig.entry.takeProfitDistance, time: bar.time });
-          if (sig.entry.maxBars) opened.expiresAt = bar.time + sig.entry.maxBars * step;
-          pos = opened;
+  const close = (s: (typeof S)[number], reason: string, price: number, time: number) => {
+    const t = account.close(s.pos!, { market: s.market, reason, price, rate: s.rateAt(price), time });
+    trades.push(t);
+    s.trades.push(t);
+    s.pos = null;
+    open--;
+    if (o.protections) onClose(prot, o.protections, s.market.id, reason, time, s.step);
+  };
+  const equity = () => S.reduce((sum, s) => sum + (s.pos ? unrealized(s.pos, { price: s.lastClose, rate: s.rateAt(s.lastClose) }) : 0), book.balance);
+
+  let now = t0;
+  for (const step of timeline(o.series)) {
+    for (const [k, i] of step) {
+      const s = S[k];
+      if (!s.ok || i < s.first || i >= s.end) continue;
+      const bar = s.candles[i];
+      now = bar.time;
+      if (s.pending) {
+        const sig: Signal = s.pending;
+        s.pending = null;
+        if (s.pos && ((s.pos.side === "long" && sig.exitLong) || (s.pos.side === "short" && sig.exitShort))) close(s, "señal de salida", bar.open, bar.time);
+        if (!s.pos && sig.entry) {
+          const eq = equity();
+          if (!canOpen(risk, o.risk, eq, open).ok || (o.protections && blocked(prot, s.market.id, bar.time))) skipped++;
+          else {
+            const rate = s.rateAt(bar.open);
+            const size = positionSize({
+              equity: eq,
+              price: bar.open,
+              stopDistance: sig.entry.stopDistance,
+              rate,
+              type: s.market.type,
+              params: o.risk,
+              barValue: averageBarValue(s.candles.slice(Math.max(0, i - 50), i)),
+            });
+            const units = paperUnits(s.market, size);
+            if (units > 0) {
+              const p = account.open({ market: s.market, side: sig.entry.side, units, price: bar.open, rate, stopDistance: sig.entry.stopDistance, takeProfitDistance: sig.entry.takeProfitDistance, time: bar.time });
+              if (sig.entry.maxBars) p.expiresAt = bar.time + sig.entry.maxBars * s.step;
+              s.pos = p;
+              open++;
+            }
+          }
         }
       }
+      if (s.pos) {
+        const hit = checkStops(s.pos, bar);
+        if (hit) close(s, hit.reason, hit.price, bar.time + s.step);
+      }
+      if (s.pos?.expiresAt !== undefined && bar.time + s.step >= s.pos.expiresAt) close(s, "tiempo máximo", bar.close, bar.time + s.step);
+      if (s.pos && s.market.strategy.trailingStopAtr > 0) {
+        const stop = trailStop(s.pos, bar, s.sigs[i]?.atr ?? NaN, s.market.strategy.trailingStopAtr);
+        if (stop !== null) s.pos.stop = stop;
+      }
+      if (s.pos) s.inMarket++;
+      s.lastClose = bar.close;
+      if (i < s.end - 1) s.pending = s.sigs[i];
     }
-
-    if (pos) {
-      const hit = checkStops(pos, bar);
-      if (hit) close(hit.reason, hit.price, bar.time + step);
-    }
-    if (pos && (pos as Position).expiresAt !== undefined && bar.time + step >= (pos as Position).expiresAt!) close("tiempo máximo", bar.close, bar.time + step);
-    if (pos && p.trailingStopAtr > 0) {
-      const stop = trailStop(pos, bar, sigs[i]?.atr ?? NaN, p.trailingStopAtr);
-      if (stop !== null) (pos as Position).stop = stop;
-    }
-
-    if (pos) barsInMarket++;
-    const equity = book.balance + (pos ? unrealized(pos, { price: bar.close, rate: o.rateAt(bar.close) }) : 0);
-    peak = Math.max(peak, equity);
-    maxDrawdown = Math.max(maxDrawdown, (1 - equity / peak) * 100);
-    if (updateRisk(risk, o.risk, equity, bar.time + step) && pos) close("parada por drawdown máximo", bar.close, bar.time + step);
-
-    if (i < replay.length - 1) pending = sigs[i];
+    const eq = equity();
+    peak = Math.max(peak, eq);
+    maxDrawdown = Math.max(maxDrawdown, (1 - eq / peak) * 100);
+    if (updateRisk(risk, o.risk, eq, now)) for (const s of S) if (s.pos) close(s, "parada por drawdown máximo", s.lastClose, now);
   }
-  const last = replay.at(-1)!;
-  if (pos) close("fin del backtest", last.close, last.time + step);
+  for (const s of S) if (s.pos) close(s, "fin del backtest", s.lastClose, s.candles[s.end - 1].time + s.step);
 
   const wins = trades.filter((t) => t.pnl > 0);
-  const grossWin = wins.reduce((s, t) => s + t.pnl, 0);
-  const grossLoss = -trades.filter((t) => t.pnl <= 0).reduce((s, t) => s + t.pnl, 0);
-  const bars = replay.length - first;
+  const grossWin = wins.reduce((a, t) => a + t.pnl, 0);
+  const grossLoss = -trades.filter((t) => t.pnl <= 0).reduce((a, t) => a + t.pnl, 0);
+  const markets = live.map((s) => ({
+    market: s.market,
+    trades: s.trades,
+    from: s.candles[s.first].time,
+    to: s.candles[s.end - 1].time + s.step,
+    bars: s.end - s.first,
+    exposurePct: (s.inMarket / (s.end - s.first)) * 100,
+    buyHoldPct: (s.candles[s.end - 1].close / s.candles[s.first].open - 1) * 100,
+  }));
   return {
-    market,
-    from: replay[first].time,
-    to: last.time + step,
-    bars,
     trades,
+    markets,
+    from: t0,
+    to: Math.max(...markets.map((m) => m.to)),
     startEquity: o.startingBalance,
     endEquity: book.balance,
     returnPct: (book.balance / o.startingBalance - 1) * 100,
-    buyHoldPct: (last.close / replay[first].open - 1) * 100,
     maxDrawdownPct: maxDrawdown,
     winRatePct: trades.length ? (wins.length / trades.length) * 100 : NaN,
     profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : NaN,
-    fees: trades.reduce((s, t) => s + t.fees, 0),
-    exposurePct: (barsInMarket / bars) * 100,
+    fees: trades.reduce((a, t) => a + t.fees, 0),
     halted: risk.halted,
+    skipped,
   };
+}
+
+export interface BacktestOptions extends Omit<PortfolioOptions, "series">, SeriesInput {}
+
+export interface BacktestResult extends Omit<PortfolioResult, "markets"> {
+  market: Market;
+  bars: number;
+  buyHoldPct: number;
+  exposurePct: number;
+}
+
+/** One market alone with its own account. */
+export function backtest(o: BacktestOptions): BacktestResult {
+  const { market, candles, rateAt, context, ...rest } = o;
+  let r: PortfolioResult;
+  try {
+    r = simulate({ ...rest, series: [{ market, candles, rateAt, context }] });
+  } catch {
+    throw new Error(`${market.id}: historial insuficiente para el backtest (${candles.length} velas)`);
+  }
+  const { markets, ...totals } = r;
+  return { ...totals, market, bars: markets[0].bars, buyHoldPct: markets[0].buyHoldPct, exposurePct: markets[0].exposurePct, from: markets[0].from, to: markets[0].to };
 }

@@ -8,7 +8,7 @@ import { CcxtSource, createExchange } from "./data/ccxt.js";
 import { OandaClient, OandaSource } from "./data/oanda.js";
 import type { CandleSource } from "./data/source.js";
 import { YahooFxSource } from "./data/yahoo.js";
-import type { BotState } from "./store.js";
+import { paperName, type BotState } from "./store.js";
 import type { AssetClass, Market } from "./types.js";
 
 function requireEnv(...names: string[]): string[] {
@@ -51,15 +51,15 @@ export function buildBrokers(config: Config, markets: Market[], state: BotState)
         `Antes, prueba la estrategia con backtest y en modo paper o en una cuenta de pruebas.`,
     );
   }
-  const paper = new PaperBroker(state.paper, config.paper);
+  const paper = (type: AssetClass) => new PaperBroker(state.papers[type], config.paper, paperName(type));
   const brokers: Partial<Record<AssetClass, Broker>> = {};
   if (markets.some((m) => m.type === "crypto")) {
     if (config.crypto.broker === "exchange") {
       const [apiKey, secret] = requireEnv("CRYPTO_API_KEY", "CRYPTO_API_SECRET");
       const ex = createExchange(config.crypto.exchange, { apiKey, secret, password: process.env.CRYPTO_API_PASSWORD }, config.crypto.sandbox);
       brokers.crypto = new ExchangeBroker(ex, !config.crypto.sandbox);
-    } else brokers.crypto = paper;
+    } else brokers.crypto = paper("crypto");
   }
-  if (markets.some((m) => m.type === "forex")) brokers.forex = config.forex.broker === "oanda" ? new OandaBroker(oandaClient(config)) : paper;
+  if (markets.some((m) => m.type === "forex")) brokers.forex = config.forex.broker === "oanda" ? new OandaBroker(oandaClient(config)) : paper("forex");
   return brokers;
 }

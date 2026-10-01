@@ -2,19 +2,21 @@
 import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { unrealized } from "./brokers/broker.js";
-import { backtest, type BacktestResult } from "./backtest.js";
-import { loadConfig, type Config } from "./config.js";
+import { simulate, type PortfolioResult, type SeriesInput } from "./backtest.js";
+import { loadConfig, makeMarket, type Config } from "./config.js";
 import { quoteRate, rateFunction } from "./data/source.js";
 import { Bot, historyStart } from "./engine.js";
 import * as fmt from "./fmt.js";
-import { telegramNotifier } from "./notify.js";
+import { telegramCommands, telegramNotifier } from "./notify.js";
+import { selectPairs } from "./pairs.js";
+import { lookaheadCheck } from "./verify.js";
 import { buildBrokers, buildSources } from "./setup.js";
-import { Store } from "./store.js";
+import { paperName, Store } from "./store.js";
 import { applyLearning, describeLearning, learn, loadLearning, saveLearning } from "./learn.js";
 import { eventStudy, features, footprintsAt, HORIZONS } from "./research.js";
 import { minCandles, needsReference, referenceMarket, signalAt, strategyOf } from "./strategy.js";
 import { closedCandles, TIMEFRAME_MS } from "./timeframes.js";
-import type { Candle, Market, PriceMark } from "./types.js";
+import type { Candle, ClosedTrade, Market, PriceMark } from "./types.js";
 
 const HELP = `Bot de trading de criptomonedas y divisas
 
@@ -32,6 +34,7 @@ Comandos:
       --temporalidad 3m    Solo los mercados de esa temporalidad (por defecto la más usada)
   aprender                 Reajusta los parámetros con datos recientes y los valida en datos no vistos;
                            pausa los mercados donde ninguna configuración gana
+  verificar                Comprueba que ninguna estrategia mira al futuro (sesgo de anticipación)
   run (o bot)              Arranca el bot: vigila los mercados, opera y vuelve a aprender cada 24 h
       --once               Hace una sola pasada y termina (útil con cron)
   status                   Saldo, posiciones abiertas, últimas operaciones y límites de riesgo
@@ -82,6 +85,21 @@ async function scan(config: Config, markets: Market[]): Promise<void> {
   console.log(fmt.table(["Mercado", "Precio", "24h", "Volumen", "Compras", "Huella de ballenas", "Señal"], rows));
 }
 
+/** Configured markets plus the pairs picked automatically from Binance (crypto.autoPairs). */
+async function withAutoPairs(config: Config, manual: Market[]): Promise<Market[]> {
+  const a = config.crypto.autoPairs;
+  if (!a.enabled) return manual;
+  if (config.crypto.exchange !== "binance") throw new Error("crypto.autoPairs solo funciona con Binance");
+  const picks = await selectPairs(a);
+  const markets = [...manual];
+  for (const p of picks) {
+    if (markets.some((m) => m.symbol === p.symbol && m.timeframe === a.timeframe)) continue;
+    markets.push(makeMarket(config, "crypto", { symbol: p.symbol, timeframe: a.timeframe, strategy: a.strategy }, markets));
+  }
+  log(`Pares automáticos (${a.minVolumeUsd / 1e6}-${a.maxVolumeUsd / 1e6} M USD/día, spread ≤ ${a.maxSpreadPct}%, ≥ ${a.minAgeDays} días): ${picks.map((p) => `${p.symbol} ${(p.volumeUsd / 1e6).toFixed(1)}M ${p.spreadPct.toFixed(2)}%`).join(", ") || "ninguno"}`);
+  return markets;
+}
+
 /** Closed bars of the reference market (BTC) for each timeframe that needs it. */
 async function referenceBars(
   config: Config,
@@ -102,6 +120,26 @@ async function referenceBars(
     }
   }
   return out;
+}
+
+async function verify(config: Config, markets: Market[]): Promise<void> {
+  const { sources: src } = buildSources(config, markets);
+  const now = Date.now();
+  let failed = 0;
+  for (const m of markets) {
+    try {
+      const since = historyStart(m, config.historyBars * 2, now);
+      const candles = closedCandles(await src[m.type]!.history(m, since), m.timeframe, now);
+      const reference = (await referenceBars(config, [m], src, () => since, now)).get(m.timeframe);
+      const r = lookaheadCheck({ strategy: strategyOf(m), params: m.strategy, allowShort: m.allowShort, candles, context: { reference } });
+      if (r.mismatches.length) failed++;
+      console.log(`${r.mismatches.length ? "✗" : "✓"} ${m.id} (${strategyOf(m).name}): ${r.checked} velas comprobadas, ${r.mismatches.length} discrepancias`);
+      for (const x of r.mismatches.slice(0, 3)) console.log(`    ${fmt.time(x.time)}: con todo el historial ${x.full}, cortado ${x.cut}`);
+    } catch (err) {
+      console.log(`? ${m.id}: ${(err as Error).message}`);
+    }
+  }
+  console.log(failed ? `\n${failed} mercados con sesgo de anticipación: sus backtests no son fiables.` : "\nNinguna estrategia mira al futuro.");
 }
 
 async function study(config: Config, markets: Market[], days: number, timeframe?: string): Promise<void> {
@@ -162,70 +200,77 @@ async function runBacktest(config: Config, markets: Market[], opts: { days: numb
   const { sources: src, fx } = buildSources(config, selected);
   const now = Date.now();
   const tradeFrom = now - opts.days * DAY;
-  const results: BacktestResult[] = [];
   const ccy = config.accountCurrency;
-  const settled = await Promise.all(
-    selected.map(async (m): Promise<BacktestResult | null> => {
+  const loaded = await Promise.all(
+    selected.map(async (m): Promise<SeriesInput | null> => {
       try {
-        const warmup = minCandles(m) * 3;
-        const since = historyStart(m, warmup, tradeFrom);
+        const since = historyStart(m, minCandles(m) * 3, tradeFrom);
         const candles = closedCandles(await src[m.type]!.history(m, since), m.timeframe, now);
-        if (candles.length && candles[0].time > tradeFrom) {
-          log(`${m.id}: la fuente solo da historia desde ${fmt.time(candles[0].time)}; el backtest es más corto de lo pedido`);
-        }
+        if (candles.length && candles[0].time > tradeFrom) log(`${m.id}: la fuente solo da historia desde ${fmt.time(candles[0].time)}; el backtest es más corto de lo pedido`);
         const rateAt = await rateFunction(m, ccy, fx, candles.at(-1)?.close ?? 1);
         const reference = (await referenceBars(config, [m], src, () => since, now)).get(m.timeframe);
-        return backtest({ market: m, candles, risk: config.risk, costs: config.paper, startingBalance: config.paper.startingBalance, rateAt, tradeFrom, context: { reference } });
+        return { market: m, candles, rateAt, context: { reference } };
       } catch (err) {
         log(`${m.id}: ${(err as Error).message}`);
         return null;
       }
     }),
   );
-  results.push(...settled.filter((r): r is BacktestResult => r !== null));
-  if (!results.length) return;
+  const all = loaded.filter((x): x is SeriesInput => x !== null);
+  for (const type of ["crypto", "forex"] as const) {
+    const series = all.filter((x) => x.market.type === type);
+    if (series.length) report(config, simulate({ series, risk: config.risk, costs: config.paper, startingBalance: config.paper.startingBalance, tradeFrom, protections: config.protections }), type, opts.listTrades);
+  }
+  console.log(
+    "\nOjo: un backtest no garantiza resultados futuros. Incluye comisiones, deslizamiento y spread simulados, pero no la profundidad real del libro de órdenes, " +
+      "caídas del exchange ni el coste de financiación de las posiciones apalancadas de divisas.",
+  );
+}
+
+function report(config: Config, r: PortfolioResult, type: "crypto" | "forex", listTrades: boolean): void {
+  const ccy = config.accountCurrency;
 
   const pf = (v: number) => (Number.isNaN(v) ? "—" : v === Infinity ? "∞" : v.toFixed(2));
-  console.log(`\nBacktest — capital inicial ${fmt.money(config.paper.startingBalance, ccy)} por mercado, riesgo ${config.risk.riskPerTradePct}% por operación\n`);
+  const sum = (ts: ClosedTrade[]) => ts.reduce((a, t) => a + t.pnl, 0);
+  console.log(`\nBacktest de la cuenta de ${type === "crypto" ? "cripto" : "divisas"}: ${fmt.money(config.paper.startingBalance, ccy)} compartidos por sus mercados, como en el bot (máx. ${config.risk.maxOpenPositions} posiciones, riesgo ${config.risk.riskPerTradePct}% por operación, protecciones activas)\n`);
   console.log(
     fmt.table(
-      ["Mercado", "Desde", "Hasta", "Ops", "Aciertos", "F. beneficio", "Resultado", "Rentab.", "Comprar y mantener", "Máx. caída", "Comisiones", "Exposición"],
-      results.map((r) => [
-        r.market.id,
-        fmt.time(r.from).slice(0, 10),
-        fmt.time(r.to).slice(0, 10),
-        String(r.trades.length),
-        Number.isNaN(r.winRatePct) ? "—" : `${r.winRatePct.toFixed(0)}%`,
-        pf(r.profitFactor),
-        fmt.money(r.endEquity - r.startEquity, ccy),
-        fmt.pct(r.returnPct),
-        fmt.pct(r.buyHoldPct),
-        `-${r.maxDrawdownPct.toFixed(1)}%`,
-        fmt.money(r.fees, ccy),
-        `${r.exposurePct.toFixed(0)}%`,
-      ]),
+      ["Mercado", "Desde", "Ops", "Aciertos", "F. beneficio", "Resultado", "Comprar y mantener", "Exposición"],
+      r.markets.map((m) => {
+        const wins = m.trades.filter((t) => t.pnl > 0);
+        const gl = -m.trades.filter((t) => t.pnl <= 0).reduce((a, t) => a + t.pnl, 0);
+        const gw = sum(wins);
+        return [
+          m.market.id,
+          fmt.time(m.from).slice(0, 10),
+          String(m.trades.length),
+          m.trades.length ? `${((wins.length / m.trades.length) * 100).toFixed(0)}%` : "—",
+          pf(gl > 0 ? gw / gl : gw > 0 ? Infinity : NaN),
+          fmt.money(sum(m.trades), ccy),
+          fmt.pct(m.buyHoldPct),
+          `${m.exposurePct.toFixed(0)}%`,
+        ];
+      }),
     ),
   );
-  const total = results.reduce((s, r) => s + r.endEquity - r.startEquity, 0);
-  console.log(`\nResultado conjunto: ${fmt.money(total, ccy)} sobre ${fmt.money(config.paper.startingBalance * results.length, ccy)} (${fmt.pct((total / (config.paper.startingBalance * results.length)) * 100)})`);
-  for (const r of results.filter((x) => x.halted)) console.log(`${r.market.id}: se detuvo por ${r.halted}`);
+  console.log(
+    `\nTotal: ${r.trades.length} operaciones, aciertos ${Number.isNaN(r.winRatePct) ? "—" : r.winRatePct.toFixed(0) + "%"}, factor de beneficio ${pf(r.profitFactor)}, ` +
+      `resultado ${fmt.money(r.endEquity - r.startEquity, ccy)} (${fmt.pct(r.returnPct)}), caída máxima -${r.maxDrawdownPct.toFixed(1)}%, comisiones ${fmt.money(r.fees, ccy)}.`,
+  );
+  console.log(`Señales no operadas por el límite de posiciones o las protecciones: ${r.skipped}.`);
+  if (r.halted) console.log(`Se detuvo por ${r.halted}`);
 
-  if (opts.listTrades) {
-    for (const r of results) {
-      if (!r.trades.length) continue;
-      console.log(`\n${r.market.id}`);
+  if (listTrades) {
+    for (const m of r.markets.filter((x) => x.trades.length)) {
+      console.log(`\n${m.market.id}`);
       console.log(
         fmt.table(
           ["Entrada", "Salida", "Lado", "Precio entrada", "Precio salida", "Resultado", "Motivo"],
-          r.trades.map((t) => [fmt.time(t.openedAt), fmt.time(t.closedAt), fmt.side(t.side), fmt.price(t.entryPrice), fmt.price(t.exitPrice), fmt.money(t.pnl, ccy), t.reason]),
+          m.trades.map((t) => [fmt.time(t.openedAt), fmt.time(t.closedAt), fmt.side(t.side), fmt.price(t.entryPrice), fmt.price(t.exitPrice), fmt.money(t.pnl, ccy), t.reason]),
         ),
       );
     }
   }
-  console.log(
-    "\nOjo: un backtest no garantiza resultados futuros. Incluye comisiones, deslizamiento y spread simulados, pero no huecos de liquidez, " +
-      "caídas del exchange ni el coste de financiación de las posiciones apalancadas de divisas.",
-  );
 }
 
 async function status(config: Config, markets: Market[], resume: boolean): Promise<void> {
@@ -262,10 +307,11 @@ async function status(config: Config, markets: Market[], resume: boolean): Promi
     }
   }
 
-  const paperOpen = state.positions.filter((p) => p.broker === "paper");
-  const paperEquity = paperOpen.reduce((s, p) => s + unrealized(p, marks.get(p.marketId)), state.paper.balance);
-  console.log(`Cuenta simulada (paper): saldo ${fmt.money(state.paper.balance, ccy)}, valor con posiciones ${fmt.money(paperEquity, ccy)}`);
-  console.log(`  Capital inicial ${fmt.money(state.paper.startingBalance, ccy)} → ${fmt.pct((paperEquity / state.paper.startingBalance - 1) * 100)}`);
+  for (const type of ["crypto", "forex"] as const) {
+    const book = state.papers[type];
+    const value = state.positions.filter((p) => p.broker === paperName(type)).reduce((s, p) => s + unrealized(p, marks.get(p.marketId)), book.balance);
+    console.log(`Cuenta simulada de ${type === "crypto" ? "cripto" : "divisas"}: saldo ${fmt.money(book.balance, ccy)}, valor con posiciones ${fmt.money(value, ccy)} (${fmt.pct((value / book.startingBalance - 1) * 100)} desde ${fmt.money(book.startingBalance, ccy)})`);
+  }
 
   console.log(`\nPosiciones abiertas (${state.positions.length})`);
   if (state.positions.length) {
@@ -314,7 +360,7 @@ async function status(config: Config, markets: Market[], resume: boolean): Promi
   }
 }
 
-async function run(config: Config, markets: Market[], path: string, once: boolean): Promise<void> {
+async function run(config: Config, manual: Market[], markets: Market[], path: string, once: boolean): Promise<void> {
   const store = new Store(config.dataDir);
   const state = store.load(config.paper.startingBalance);
   const { sources: src, fx } = buildSources(config, markets);
@@ -334,12 +380,31 @@ async function run(config: Config, markets: Market[], path: string, once: boolea
     }
   };
   applyLearning(markets, loadLearning(config.dataDir)).forEach((l) => log(l));
-  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick: learning.enabled ? relearn : undefined });
+  let pairsAt = Date.now();
+  const auto = config.crypto.autoPairs;
+  const beforeTick = async () => {
+    if (auto.enabled && Date.now() - pairsAt >= auto.refreshHours * 3_600_000) {
+      pairsAt = Date.now();
+      try {
+        const fresh = await withAutoPairs(config, manual);
+        applyLearning(fresh, loadLearning(config.dataDir));
+        const changes = await bot.setMarkets(fresh);
+        if (changes.length) {
+          log(`Lista de pares actualizada: ${changes.join(", ")}`);
+          await notify(`🔄 Pares: ${changes.join(", ")}`);
+        }
+      } catch (err) {
+        log(`No se pudo actualizar la lista de pares: ${(err as Error).message}`);
+      }
+    }
+    if (learning.enabled) await relearn();
+  };
+  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log) });
 
   log(`Configuración: ${path}. Revisión cada ${config.pollSeconds} s.`);
   for (const m of markets) {
     const b = brokers[m.type]!;
-    const mode = b.realMoney ? "DINERO REAL" : b.name === "paper" ? "simulado" : "cuenta de pruebas";
+    const mode = b.realMoney ? "DINERO REAL" : b.name.startsWith("paper") ? "simulado" : "cuenta de pruebas";
     log(`  ${m.id.padEnd(14)} → ${b.name} (${mode}), ${strategyOf(m).name}${m.allowShort ? ", largos y cortos" : ", solo largos"}${m.paused ? " — en pausa" : ""}`);
   }
   if (once) {
@@ -379,7 +444,9 @@ async function main(): Promise<void> {
     return;
   }
   if (existsSync(".env")) process.loadEnvFile(".env");
-  const { config, markets, path } = loadConfig(values.config);
+  const { config, markets: manual, path } = loadConfig(values.config);
+  const markets = await withAutoPairs(config, manual);
+  if (!markets.length) throw new Error("No hay mercados: añádelos en la configuración o activa crypto.autoPairs");
 
   switch (command) {
     case "scan":
@@ -394,13 +461,15 @@ async function main(): Promise<void> {
       if (!(days > 0)) throw new Error("--dias debe ser un número positivo");
       return study(config, markets, days, values.temporalidad);
     }
+    case "verificar":
+      return verify(config, markets);
     case "aprender":
       return runLearning(config, markets);
     case "status":
       return status(config, markets, values.reanudar);
     case "run":
     case "bot":
-      return run(config, markets, path, values.once);
+      return run(config, manual, markets, path, values.once);
     default:
       throw new Error(`Comando desconocido: ${command}\n\n${HELP}`);
   }

@@ -1,19 +1,27 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PaperBook } from "./brokers/paper.js";
+import { newProtectionState, type ProtectionState } from "./protections.js";
 import type { RiskState } from "./risk.js";
-import type { ClosedTrade, Position } from "./types.js";
+import type { AssetClass, ClosedTrade, Position } from "./types.js";
 
 export interface BotState {
   version: 1;
-  paper: PaperBook & { startingBalance: number };
+  /** One simulated account per asset class, as real crypto and forex accounts are separate. */
+  papers: Record<AssetClass, PaperBook & { startingBalance: number }>;
   positions: Position[];
   /** Start time of the last closed bar evaluated, per market. */
   lastBar: Record<string, number>;
   /** Risk limits state, per broker. */
   risk: Record<string, RiskState>;
   recentTrades: ClosedTrade[];
+  protections: ProtectionState;
+  /** Set from Telegram (/pausa): no new trades until /reanudar. */
+  manualPause?: boolean;
 }
+
+const newBook = (balance: number) => ({ balance, startingBalance: balance, nextId: 1 });
+export const paperName = (type: AssetClass) => (type === "crypto" ? "paper-cripto" : "paper-forex");
 
 const CSV_HEADER = "cerrada,abierta,broker,mercado,lado,unidades,entrada,salida,pnl,comisiones,motivo\n";
 
@@ -27,8 +35,18 @@ export class Store {
   }
 
   load(startingBalance: number): BotState {
-    if (existsSync(this.statePath)) return JSON.parse(readFileSync(this.statePath, "utf8")) as BotState;
-    return { version: 1, paper: { balance: startingBalance, startingBalance, nextId: 1 }, positions: [], lastBar: {}, risk: {}, recentTrades: [] };
+    if (existsSync(this.statePath)) {
+      const state = JSON.parse(readFileSync(this.statePath, "utf8")) as BotState & { paper?: PaperBook & { startingBalance: number } };
+      // State files from earlier versions: one shared paper account and no protections.
+      state.protections ??= newProtectionState();
+      if (!state.papers) {
+        state.papers = { crypto: state.paper ?? newBook(startingBalance), forex: newBook(startingBalance) };
+        delete state.paper;
+        for (const p of state.positions) if (p.broker === "paper") p.broker = paperName(p.type);
+      }
+      return state;
+    }
+    return { version: 1, papers: { crypto: newBook(startingBalance), forex: newBook(startingBalance) }, positions: [], lastBar: {}, risk: {}, recentTrades: [], protections: newProtectionState() };
   }
 
   /** Write to a temporary file and rename, so a crash never leaves a half-written state. */

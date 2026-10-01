@@ -83,7 +83,7 @@ class FakeSource {
   }
 }
 
-function setup(overrides = {}) {
+export function setup(overrides = {}) {
   const { config } = parseConfig({ crypto: { exchange: "kraken", markets: [{ symbol: "BTC/USD", timeframe: "1h" }] }, dataDir: tempDir(), ...overrides });
   const m = market("BTC/USD");
   const store = new Store(config.dataDir);
@@ -91,24 +91,26 @@ function setup(overrides = {}) {
   const source = new FakeSource();
   const messages = [];
   const logs = [];
+  const commands = [];
   let now = 0;
   const bot = new Bot({
     config,
     markets: [m],
     sources: { crypto: source },
-    brokers: { crypto: new PaperBroker(state.paper, COSTS) },
+    brokers: { crypto: new PaperBroker(state.papers.crypto, COSTS) },
     fx: { rate: async () => assert.fail("no FX needed for USD markets") },
     store,
     state,
     notify: async (msg) => void messages.push(msg),
     log: (msg) => void logs.push(msg),
     now: () => now,
+    commands: async () => commands.splice(0),
   });
-  return { bot, m, state, store, source, messages, logs, setNow: (t) => (now = t) };
+  return { bot, m, state, store, source, messages, logs, commands, setNow: (t) => (now = t) };
 }
 
 /** Bars up to the first bullish signal, plus a forming bar. */
-function upToSignal(m) {
+export function upToSignal(m) {
   const all = bars(vShape());
   const sigs = signals(m, all);
   const e = sigs.findIndex((s) => s?.entry);
@@ -151,7 +153,7 @@ test("engine: opens on a fresh signal once, then exits at the stop", async () =>
   assert.equal(t.reason, "stop-loss");
   close(t.exitPrice, p.stop * 0.9995); // the stop level less slippage
   assert.ok(t.pnl < 0);
-  close(s.state.paper.balance, 10_000 + t.pnl);
+  close(s.state.papers.crypto.balance, 10_000 + t.pnl);
   const csv = readFileSync(s.store.tradesPath, "utf8").trim().split("\n");
   assert.equal(csv.length, 2);
   assert.match(csv[1], /BTC\/USD,long/);
@@ -187,4 +189,45 @@ test("engine: a failing data source is reported without stopping the bot", async
   assert.ok(s.logs.some((l) => l.includes("exchange caído")));
   assert.equal(s.messages.length, 1);
   assert.match(s.messages[0], /5 veces seguidas/);
+});
+
+test("engine: Telegram /pausa blocks entries, /cerrar closes, /reanudar resumes", async () => {
+  const s = setup();
+  const { candles, signalBar } = upToSignal(s.m);
+  s.source.data.set(s.m.id, candles);
+  s.setNow(signalBar.time + HOUR + 60_000);
+  s.commands.push({ name: "pausa", args: [] });
+  await s.bot.tick();
+  assert.equal(s.state.manualPause, true);
+  assert.equal(s.state.positions.length, 0);
+  assert.ok(s.logs.some((l) => /pausa manual/.test(l)));
+
+  s.commands.push({ name: "reanudar", args: [] }, { name: "estado", args: [] });
+  s.state.lastBar = {}; // evaluate the same signal bar again
+  await s.bot.tick();
+  assert.equal(s.state.manualPause, false);
+  assert.equal(s.state.positions.length, 1);
+  assert.ok(s.messages.some((m) => m.includes("mercados vigilados"))); // /estado reply
+  assert.ok(s.messages.some((m) => m.includes("abro larga en BTC/USD")));
+
+  s.commands.push({ name: "cerrar", args: ["btc"] });
+  await s.bot.tick();
+  assert.equal(s.state.positions.length, 0);
+  assert.equal(s.state.recentTrades[0].reason, "cierre manual (Telegram)");
+  // The manual close starts the cooldown for that market.
+  assert.ok(s.state.protections.cooldownUntil[s.m.id] > signalBar.time);
+});
+
+test("engine: a new market list keeps markets that still have a position", async () => {
+  const s = setup();
+  const { candles, signalBar } = upToSignal(s.m);
+  s.source.data.set(s.m.id, candles);
+  s.setNow(signalBar.time + HOUR + 60_000);
+  await s.bot.tick();
+  assert.equal(s.state.positions.length, 1);
+  const other = market("ETH/USD");
+  s.source.data.set(other.id, candles);
+  const changes = await s.bot.setMarkets([other]);
+  assert.deepEqual(changes, ["+ ETH/USD 1h"]);
+  assert.deepEqual(await s.bot.setMarkets([]), ["- ETH/USD 1h"]);
 });

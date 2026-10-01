@@ -19,6 +19,12 @@
     "maxDrawdownPct": 15,
     "maxBarVolumePct": 20
   },
+  "protections": {
+    "cooldownBars": 20,
+    "stopGuardCount": 3,
+    "stopGuardMinutes": 60,
+    "stopGuardPauseMinutes": 240
+  },
   "strategies": {
     "capitulacion": {
       "lookback": 10,
@@ -68,10 +74,18 @@
       { "symbol": "ENS/USDT", "timeframe": "3m", "strategy": "capitulacion" },
       { "symbol": "MAGIC/USDT", "timeframe": "3m", "strategy": "capitulacion" },
       { "symbol": "AXS/USDT", "timeframe": "3m", "strategy": "capitulacion" },
-      { "symbol": "FLOW/USDT", "timeframe": "3m", "strategy": "capitulacion" },
-      { "symbol": "BTC/USDT", "timeframe": "1h", "strategy": "cruce_medias" },
-      { "symbol": "ETH/USDT", "timeframe": "1h", "strategy": "cruce_medias" }
-    ]
+      { "symbol": "FLOW/USDT", "timeframe": "3m", "strategy": "capitulacion" }
+    ],
+    "autoPairs": {
+      "enabled": false,
+      "minVolumeUsd": 1000000,
+      "maxVolumeUsd": 8000000,
+      "maxSpreadPct": 0.2,
+      "minAgeDays": 180,
+      "max": 15,
+      "timeframe": "3m",
+      "strategy": "capitulacion"
+    }
   },
   "forex": {
     "broker": "paper",

@@ -12,6 +12,12 @@ Bot que vigila mercados de cripto y forex, **estudia las huellas que dejan las b
   - `cruce_medias`, de seguimiento de tendencia.
 - **Aprende**: cada 24 h prueba cientos de combinaciones de parámetros con el historial reciente y solo adopta una si también gana en el tramo más reciente, que no se usó para elegirla. Si nada gana, **pone el mercado en pausa** (lo vigila pero no opera).
 - **Estudia**: `npm run estudiar` mide qué hizo el precio tras cada huella de ballena, para comprobar si un patrón sigue funcionando.
+- **Se protege** como Freqtrade:
+  - tras cerrar una operación, espera 20 velas antes de volver a operar esa moneda;
+  - tras 3 stop-loss en una hora, deja de abrir operaciones durante 4 horas (una cascada que no rebota).
+- **Elige los pares solo** (opcional): monedas de Binance con 1-8 millones de USD de volumen diario, spread pequeño y al menos 180 días cotizando. Excluye stablecoins y tokens apalancados, y renueva la lista cada 24 h.
+- **Se controla desde Telegram**: `/estado`, `/pausa`, `/reanudar`, `/cerrar SIMBOLO|todo`.
+- **Se verifica**: `npm run verificar` comprueba que ninguna estrategia mira al futuro (sesgo de anticipación).
 - **Limita el riesgo**: arriesga un % fijo por operación, limita el tamaño de cada posición según la liquidez del par, pone stop y objetivo en cada operación y cierra por tiempo. Además deja de operar el resto del día si pierde un 3%, y se detiene por completo si cae un 15% desde su máximo.
 - **Ejecuta** en simulado, en cualquier exchange vía [ccxt](https://github.com/ccxt/ccxt) (Binance, Kraken, Bybit, OKX…) o en OANDA para divisas, en cuenta de pruebas o real.
 - **Avisa** por Telegram (opcional) y guarda cada operación en `data/trades.csv`.
@@ -33,7 +39,8 @@ cp .env.example .env             # solo si vas a usar claves o Telegram
 npm run scan        # foto del mercado y huellas de ballenas ahora mismo
 npm run estudiar    # qué patrones de ballenas funcionan con datos recientes
 npm run aprender    # reajusta parámetros y decide qué mercados operar (2-4 min)
-npm run backtest    # cómo le habría ido con la configuración actual
+npm run backtest    # cómo le habría ido con la configuración actual (cuenta compartida)
+npm run verificar   # comprueba que las estrategias no miran al futuro
 npm run bot         # arranca el bot (vuelve a aprender cada 24 h); Ctrl+C para pararlo
 npm run status      # saldo, posiciones, operaciones, aprendizaje y límites
 ```
@@ -45,6 +52,43 @@ npm run status      # saldo, posiciones, operaciones, aprendizaje y límites
 | `npm run backtest -- --dias 150 --mercado CHZ/USDT --operaciones` | Un mercado, con la lista de operaciones |
 | `npm run bot -- --once` | Una sola revisión y termina (para cron) |
 | `npm run status -- --reanudar` | Reactiva el trading tras una parada por pérdidas |
+
+### Control desde Telegram
+
+Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env`, el bot avisa de cada operación y obedece estos comandos, solo desde tu chat:
+
+| Comando | Qué hace |
+| --- | --- |
+| `/estado` | Saldo, posiciones con su resultado, operaciones de hoy y pausas activas |
+| `/pausa` | Deja de abrir operaciones (las abiertas siguen con su stop y objetivo) |
+| `/reanudar` | Quita la pausa manual, la de protecciones y la parada por pérdidas |
+| `/cerrar BTC` o `/cerrar todo` | Cierra a mercado |
+
+Los mensajes enviados mientras el bot estaba apagado se descartan, no se ejecutan.
+
+## Comparación con otros bots
+
+| | Este bot | Freqtrade | Hummingbot | Jesse | OctoBot | 3Commas / Pionex |
+| --- | --- | --- | --- | --- | --- | --- |
+| Estrategias de ballenas (cascadas, bombeos, barridas) con estudio propio | **Sí** | Se programan a mano | No | Se programan a mano | No | No |
+| Aprendizaje con validación en datos no vistos y pausa automática | **Sí, cada 24 h** | Hyperopt manual | No | Optimización manual | No | No |
+| Backtest de cartera (cuenta compartida) | Sí | Sí | No | Sí | Parcial | No |
+| Protecciones (enfriamiento, racha de stops, pérdidas) | Sí | Sí | No | No | Parcial | Parcial |
+| Lista dinámica de pares | Sí (Binance) | Sí (cualquier exchange) | No | No | Parcial | Sí |
+| Detección de sesgo de anticipación | Sí | Sí | No | No | No | No |
+| Control por Telegram | Sí | Sí | Sí | No | Sí | Sí |
+| Stop-loss en el exchange (protege con el bot apagado) | Solo OANDA | Sí | — | Sí | Sí | Sí |
+| Interfaz web | No | Sí | Sí | Sí | Sí | Sí |
+| Market making / arbitraje | No | No | **Sí** | No | No | No |
+| Grid / DCA | No | Con estrategias | Sí | No | Sí | **Sí** |
+| Futuros y apalancamiento | No | Sí | Sí | Sí | Sí | Sí |
+
+Lo que falta y por qué:
+
+- **Stop-loss en el exchange para cripto**: es lo siguiente. No pude probarlo porque Binance bloquea este servidor.
+- **Interfaz web**: Telegram cubre el control diario.
+- **Grid y DCA**: promediar a la baja choca con la gestión del riesgo, y los datos no los respaldan en estos pares.
+- **Market making**: es otro negocio, que necesita baja latencia y comisiones de creador de mercado.
 
 ## Lo que el bot ha aprendido de las ballenas
 
@@ -70,13 +114,17 @@ Los desplomes llegan en racimos: un mismo día de caída activa una docena de mo
 
 ## Resultados del backtest
 
-Configuración de ejemplo, del 4-5-2026 al 1-10-2026, 10.000 USD por mercado, comisiones y deslizamiento incluidos:
+El backtest simula **una cuenta compartida** por todos los mercados de cripto (y otra para divisas), como el bot en vivo. El límite de 4 posiciones y las protecciones deciden cuáles de las señales simultáneas se operan. Configuración de ejemplo, del 4-5-2026 al 1-10-2026, 10.000 USD, comisiones y deslizamiento incluidos:
 
-| Estrategia y mercados | Resultado |
-| --- | --- |
-| `capitulacion`, 12 pares de bajo volumen en 3m | **Gana en los 12**: factor de beneficio de 1,47 a 7,62 y caída máxima ≤ 2,6%. Pocas operaciones (8-35 por par) y posiciones pequeñas por el límite de liquidez: +0,5% a +4,4% por par |
-| `cruce_medias`, BTC y ETH en 1h | Pierde (−1,1% y −3,8%). El aprendizaje los pone en pausa |
-| `cruce_medias`, divisas en 1h | Pierde con los parámetros por defecto. El aprendizaje adoptó otros (EMA 20/100, stop 3 ATR) que ganaron en validación |
+| Simulación (12 pares de bajo volumen, 3m, `capitulacion`) | Factor de beneficio | Resultado | Caída máxima |
+| --- | --- | --- | --- |
+| Cada mercado con su propia cuenta (método anterior, optimista) | 2,17 | +1,7% sobre 120.000 | 2,6% |
+| Una cuenta compartida, sin protecciones | 1,36 | +5,6% | 5,3% |
+| **Una cuenta compartida con protecciones** (configuración por defecto) | **1,88** | **+7,7%** | **2,4%** |
+
+La simulación por mercado sobrestimaba la ventaja. En los días de cascada se disparan una docena de monedas a la vez, y solo caben 4 posiciones.
+
+`cruce_medias` pierde en BTC/ETH en 1h (por eso ya no está en el ejemplo) y en divisas con los parámetros por defecto (−14% en 150 días, parada por pérdidas). En vivo, el aprendizaje se ejecuta antes de operar y ajusta o pausa esos mercados.
 
 **Ojo:** el filtro de BTC lo descubrí mirando estos mismos 150 días, así que este backtest **no es una prueba limpia**. La prueba de verdad son los datos futuros: por eso el bot revalida cada 24 h y pausa lo que deja de funcionar.
 
@@ -98,7 +146,7 @@ Mientras haya posiciones abiertas, el bot pospone el aprendizaje (hasta un día)
 
 | Modo | Configuración | Dinero |
 | --- | --- | --- |
-| **Simulado** (por defecto) | `crypto.broker: "paper"`, `forex.broker: "paper"` | Ficticio |
+| **Simulado** (por defecto) | `crypto.broker: "paper"`, `forex.broker: "paper"`: una cuenta para cripto y otra para divisas | Ficticio |
 | **Red de pruebas** | `crypto.broker: "exchange"`, `sandbox: true` + claves de la [testnet de Binance](https://testnet.binance.vision) | Ficticio |
 | **OANDA demo** | `forex.broker: "oanda"`, `oandaEnv: "practice"` | Ficticio |
 | **Real** | `sandbox: false` u `oandaEnv: "live"` **y** `CONFIRMAR_DINERO_REAL=si` en `.env` | **Real** |
@@ -127,6 +175,8 @@ Los precios de cripto salen de `data-api.binance.vision`, el servicio público d
 | `learning` | `enabled`, cada cuántas horas (`everyHours`), historial (`bars`, `maxDays`), % de validación (`testPct`), mínimos de operaciones y factor de beneficio |
 | `crypto.exchange` | `binance` (por defecto), `kraken`, `bybit`, `okx`… |
 | `crypto.reference` | Mercado que indica si cae todo el mercado (`BTC/USDT`) |
+| `crypto.autoPairs` | `enabled`, volumen diario (`minVolumeUsd`, `maxVolumeUsd`), `maxSpreadPct`, `minAgeDays`, `minTrades`, `max`, `timeframe`, `strategy`, `refreshHours`, `exclude` |
+| `protections` | `cooldownBars` (20), `stopGuardCount` (3) stops en `stopGuardMinutes` (60) → pausa de `stopGuardPauseMinutes` (240) |
 | `crypto.markets`, `forex.markets` | `{ "symbol": "CHZ/USDT", "timeframe": "3m", "strategy": "capitulacion", "params": { … } }` |
 
 Parámetros de `capitulacion`:
@@ -145,6 +195,17 @@ Parámetros de `cruce_medias`: `fastEma` 20, `slowEma` 50, `trendEma` 200, `rsiP
 El estado se guarda en `data/`. Para empezar de cero, borra esa carpeta.
 
 ## Tenerlo en marcha 24/7
+
+Con Docker (no lo pude probar aquí porque no hay Docker disponible):
+
+```bash
+docker build -t trading-bot .
+docker run -d --restart unless-stopped --name trading-bot \
+  -v "$PWD/config.json:/app/config.json:ro" -v "$PWD/.env:/app/.env:ro" -v "$PWD/data:/app/data" trading-bot
+docker logs -f trading-bot
+```
+
+O con pm2:
 
 ```bash
 npm install -g pm2
@@ -170,7 +231,8 @@ npm test          # compila y ejecuta las pruebas, sin conexión
 | `strategies/` | Estrategias (`capitulation.ts`, `ema.ts`) y su interfaz |
 | `research.ts` | Huellas de ballenas y estudio de eventos |
 | `learn.ts` | Aprendizaje con validación en datos no vistos |
-| `engine.ts`, `backtest.ts` | Bucle del bot y backtest, con las mismas reglas |
+| `engine.ts`, `backtest.ts` | Bucle del bot y backtest de cartera, con las mismas reglas |
+| `protections.ts`, `pairs.ts`, `verify.ts` | Protecciones, lista dinámica de pares, detección de sesgo de anticipación |
 | `risk.ts`, `stops.ts` | Tamaño de posición, límites, stops, objetivo y stop dinámico |
 | `brokers/`, `data/` | Simulado, exchanges (ccxt), OANDA; datos de Binance, ccxt, Yahoo y OANDA |
 

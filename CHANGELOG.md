@@ -6,6 +6,7 @@
 
 - **Bot de trading de cripto y divisas** (`trading-bot/`): vigila los mercados, opera con una estrategia de cruce de medias con filtros de tendencia y RSI, gestiona el riesgo (riesgo fijo por operación, límite de pérdida diaria y parada por drawdown) y funciona en simulado, en exchanges de cripto vía ccxt o en OANDA. Incluye backtest y avisos por Telegram.
 - **Huellas de ballenas y aprendizaje** en el bot: estrategia de capitulación para cripto de bajo volumen (velas de 3m, filtro de cascada de BTC, límite de tamaño por liquidez, salida por tiempo), estudio de patrones (`npm run estudiar`), reajuste automático con validación en datos no vistos y pausa de los mercados sin ventaja (`npm run aprender`, cada 24 h en el bot), datos de Binance con volumen de compras agresivas, y velas de 1m y 3m.
+- **Lo mejor de otros bots** en el bot de trading: backtest de cartera con una cuenta compartida, protecciones (enfriamiento y pausa tras una racha de stop-loss), lista dinámica de pares de Binance por volumen, spread y antigüedad, detección de sesgo de anticipación (`npm run verificar`), control por Telegram (`/estado`, `/pausa`, `/reanudar`, `/cerrar`), cuentas simuladas separadas para cripto y divisas, y Dockerfile.
 
 ## 1.1.0
 

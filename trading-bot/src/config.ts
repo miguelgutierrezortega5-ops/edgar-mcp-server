@@ -52,6 +52,17 @@ const configSchema = z
       })
       .strict()
       .default({}),
+    protections: z
+      .object({
+        /** Bars to wait before trading a market again after closing a trade in it. */
+        cooldownBars: z.number().int().min(0).default(20),
+        /** After this many stop-losses within stopGuardMinutes, open nothing for stopGuardPauseMinutes (0 = off). */
+        stopGuardCount: z.number().int().min(0).default(3),
+        stopGuardMinutes: z.number().positive().default(60),
+        stopGuardPauseMinutes: z.number().positive().default(240),
+      })
+      .strict()
+      .default({}),
     /** Overrides of each strategy's default parameters, for all markets that use it. */
     strategies: z.object(Object.fromEntries(STRATEGY_NAMES.map((n) => [n, paramsSchema.optional()]))).strict().default({}),
     learning: z
@@ -76,6 +87,24 @@ const configSchema = z
         broker: z.enum(["paper", "exchange"]).default("paper"),
         sandbox: z.boolean().default(true),
         markets: z.array(marketSchema(/^[A-Z0-9]{2,12}\/[A-Z0-9]{2,12}$/, "BTC/USDT")).default([]),
+        /** Pick pairs automatically from Binance by volume, spread and age (added to `markets`). */
+        autoPairs: z
+          .object({
+            enabled: z.boolean().default(false),
+            quote: z.string().default("USDT"),
+            minVolumeUsd: z.number().min(0).default(1_000_000),
+            maxVolumeUsd: z.number().positive().default(8_000_000),
+            maxSpreadPct: z.number().positive().default(0.2),
+            minAgeDays: z.number().min(0).default(180),
+            minTrades: z.number().int().min(0).default(10_000),
+            max: z.number().int().min(1).max(60).default(15),
+            refreshHours: z.number().positive().default(24),
+            timeframe: z.enum(TIMEFRAMES as [Timeframe, ...Timeframe[]]).default("3m"),
+            strategy: z.enum(STRATEGY_NAMES).default("capitulacion"),
+            exclude: z.array(z.string()).default([]),
+          })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),
@@ -111,7 +140,18 @@ export function parseConfig(raw: unknown): { config: Config; markets: Market[] }
   if (config.forex.broker === "oanda") config.forex.data = "oanda";
 
   const markets: Market[] = [];
-  const add = (type: AssetClass, m: z.infer<ReturnType<typeof marketSchema>>) => {
+  const add = (type: AssetClass, m: MarketSpec) => markets.push(makeMarket(config, type, m, markets));
+  config.crypto.markets.forEach((m) => add("crypto", m));
+  config.forex.markets.forEach((m) => add("forex", m));
+  if (!markets.length && !config.crypto.autoPairs.enabled) throw new Error("No hay mercados configurados (crypto.markets / forex.markets)");
+  return { config, markets };
+}
+
+export type MarketSpec = Pick<z.infer<ReturnType<typeof marketSchema>>, "symbol" | "timeframe" | "strategy"> & Partial<z.infer<ReturnType<typeof marketSchema>>>;
+
+/** Build and validate one market; `existing` catches duplicates. */
+export function makeMarket(config: Config, type: AssetClass, m: MarketSpec, existing: Market[] = []): Market {
+  {
     const [b, q] = m.symbol.split("/");
     const impl = STRATEGIES[m.strategy];
     const id = `${m.symbol} ${m.timeframe}`;
@@ -122,16 +162,12 @@ export function parseConfig(raw: unknown): { config: Config; markets: Market[] }
     const problem = impl.validate(strategy);
     if (problem) throw new Error(`${id}: ${problem}`);
     if (impl.minCandles(strategy) + 50 > config.historyBars) throw new Error(`${id}: historyBars (${config.historyBars}) debe ser al menos ${impl.minCandles(strategy) + 50} para calcular los indicadores`);
-    if (markets.some((x) => x.id === id)) throw new Error(`Mercado duplicado: ${id}`);
+    if (existing.some((x) => x.id === id)) throw new Error(`Mercado duplicado: ${id}`);
     if (type === "forex" && m.timeframe === "3m") throw new Error(`${id}: ni Yahoo ni OANDA ofrecen velas de 3m en divisas`);
     const allowShort = m.allowShort ?? type === "forex";
     if (type === "crypto" && allowShort && config.crypto.broker === "exchange") throw new Error(`${id}: el trading spot no permite cortos; quita allowShort`);
-    markets.push({ id, type, symbol: m.symbol, base: b, quote: q, timeframe: m.timeframe, allowShort, strategyName: m.strategy, strategy });
-  };
-  config.crypto.markets.forEach((m) => add("crypto", m));
-  config.forex.markets.forEach((m) => add("forex", m));
-  if (!markets.length) throw new Error("No hay mercados configurados (crypto.markets / forex.markets)");
-  return { config, markets };
+    return { id, type, symbol: m.symbol, base: b, quote: q, timeframe: m.timeframe, allowShort, strategyName: m.strategy, strategy };
+  }
 }
 
 export function loadConfig(path?: string): LoadedConfig {
