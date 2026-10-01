@@ -46,32 +46,39 @@ El bot corre en el propio teléfono con [Termux](https://f-droid.org/packages/co
    curl -fsSL https://raw.githubusercontent.com/miguelgutierrezortega5-ops/edgar-mcp-server/ccr-6370af02-zxtdm6/trading-bot/scripts/android/instalar.sh | bash
    ```
    Al final muestra el diagnóstico: "Binance futuros en vivo" debería salir con ✓.
-3. Arranca el reto de 50 USD (simulado):
-   ```bash
-   bash ~/edgar-mcp-server/trading-bot/scripts/android/iniciar.sh
-   ```
-4. Para consultarlo: `bash ~/edgar-mcp-server/trading-bot/scripts/android/estado.sh`. Para pararlo: `detener.sh`. Para instalar una versión nueva: `actualizar.sh` (los dos en la misma carpeta).
+3. Arranca el reto de 50 USD (simulado) con `bot iniciar`. El primer arranque aprende de la historia y puede tardar varios minutos.
+
+El instalador deja el atajo `bot`:
+
+| Comando | Qué hace |
+| --- | --- |
+| `bot iniciar` | Arranca el bot en segundo plano |
+| `bot estado` | Saldo, posiciones y últimas líneas del registro |
+| `bot registro` | Registro en vivo (Ctrl+C para salir; Ctrl está en la fila de teclas de Termux) |
+| `bot detener` | Lo detiene; lo simulado queda guardado y se retoma al volver a arrancar |
+| `bot actualizar` | Descarga la última versión y lo reinicia si estaba en marcha |
+| `bot telegram` | Configura avisos y control por Telegram |
+| `bot arranque` | Que arranque solo al encender el teléfono (`bot arranque no` lo quita) |
 
 **Para que Android no lo duerma:**
 
 - en Ajustes → Aplicaciones → Termux → Batería, elige "Sin restricciones";
-- deja la notificación de Termux activa ("wake lock").
+- deja la notificación de Termux activa ("wake lock");
+- si aun así se detiene solo (Android 12 o más nuevo cierra procesos en segundo plano), en Android 14 o más nuevo activa Opciones de desarrollador → "Desactivar restricciones de procesos secundarios". Las opciones de desarrollador aparecen al tocar 7 veces el número de compilación en Ajustes → Acerca del teléfono.
 
-El bot solo opera mientras el teléfono está encendido y con conexión.
+El bot solo opera mientras el teléfono está encendido y con conexión. Para que vuelva solo tras un reinicio, instala también **Termux:Boot** desde F-Droid, ábrelo una vez y escribe `bot arranque`.
 
 **Datos móviles:**
 
 - el primer aprendizaje descarga unos 100 MB de historia, así que mejor hazlo con WiFi;
 - después, las velas quedan guardadas en `data/velas` y el bot usa unos 50 MB al día.
 
-**Recomendado: avísate y contrólalo por Telegram.**
+**Recomendado: avísate y contrólalo por Telegram.** Escribe `bot telegram` y sigue los pasos:
 
-1. En Telegram, habla con @BotFather, usa `/newbot` y copia el token que te da.
-2. Habla con @userinfobot para saber tu número de chat.
-3. En Termux, abre el archivo de claves con `nano ~/edgar-mcp-server/trading-bot/.env` y rellena `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`.
-4. Detén y vuelve a arrancar el bot.
+1. en Telegram, habla con @BotFather, usa `/newbot` y pega en Termux el token que te da;
+2. abre tu bot nuevo, pulsa "Iniciar" y escríbele cualquier cosa: el asistente detecta tu chat, lo guarda en `.env`, te manda un mensaje de prueba y reinicia el bot si estaba en marcha.
 
-A partir de ahí recibes cada operación en Telegram y puedes escribirle `/estado`, `/pausa` o `/cerrar`.
+A partir de ahí recibes cada operación en Telegram y puedes escribirle `/estado`, `/pausa`, `/reanudar` o `/cerrar`.
 
 **iPhone:** iOS no permite ejecutar este tipo de programas. La alternativa es un servidor en la nube ubicado en México (Oracle Cloud tiene regiones en Querétaro y Monterrey, AWS y Azure también), que se maneja desde el navegador del teléfono, con Telegram para el día a día. Comprueba al contratar qué incluye el plan gratuito en esas regiones.
 
