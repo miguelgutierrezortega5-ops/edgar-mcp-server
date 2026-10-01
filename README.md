@@ -165,6 +165,16 @@ Por defecto escucha solo en `127.0.0.1` y rechaza peticiones con otra cabecera `
 - Los 13F llegan hasta 45 días después del cierre del trimestre y solo incluyen posiciones largas en valores cotizados en EE. UU.
 - Para respetar la política de la SEC, el servidor limita las peticiones a 8 por segundo, reintenta ante errores 429 y 5xx, y guarda en caché las respuestas.
 
+## Bot de trading de cripto y divisas
+
+La carpeta [`trading-bot/`](trading-bot/README.md) contiene un bot independiente que vigila mercados de criptomonedas y divisas, decide con una estrategia de seguimiento de tendencia (cruce de medias con filtros de tendencia y RSI, stops por ATR) y opera con gestión del riesgo. Por defecto opera en simulado; también puede usar un exchange de cripto (vía ccxt) u OANDA, en cuenta de pruebas o real. Incluye backtest, avisos por Telegram y pruebas sin conexión.
+
+```bash
+cd trading-bot && npm install && npm run scan
+```
+
+> ⚠️ El trading automático puede hacerte perder dinero. Lee su [README](trading-bot/README.md) antes de usarlo.
+
 ## Licencias y fuentes de datos
 
 **El código** se publica con licencia [MIT](LICENSE): cualquiera puede usarlo, modificarlo y venderlo, siempre que conserve el aviso de copyright. Todas las dependencias del servidor tienen licencias permisivas compatibles (MIT, ISC y BSD).

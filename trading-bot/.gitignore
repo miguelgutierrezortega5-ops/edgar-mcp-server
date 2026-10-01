@@ -1,0 +1,4 @@
+config.json
+data/
+.env
+!.env.example

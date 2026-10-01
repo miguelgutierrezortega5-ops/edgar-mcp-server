@@ -1,5 +1,11 @@
 # Cambios
 
+## Sin publicar
+
+### Nuevo
+
+- **Bot de trading de cripto y divisas** (`trading-bot/`): vigila los mercados, opera con una estrategia de cruce de medias con filtros de tendencia y RSI, gestiona el riesgo (riesgo fijo por operación, límite de pérdida diaria y parada por drawdown) y funciona en simulado, en exchanges de cripto vía ccxt o en OANDA. Incluye backtest y avisos por Telegram.
+
 ## 1.1.0
 
 ### Nuevo
