@@ -8,7 +8,8 @@ import { quoteRate, rateFunction } from "./data/source.js";
 import { Bot, historyStart } from "./engine.js";
 import * as fmt from "./fmt.js";
 import { applyUpdate, currentVersion, describeVersion, listUpdates, pendingUpdates, RESTART_CODE, UPDATE_CHECK_HOURS } from "./update.js";
-import { telegramCommands, telegramNotifier, type Command } from "./notify.js";
+import { telegramCommands, telegramNotifier, telegramReporter, type Command } from "./notify.js";
+import { caption, logTail, markReported, remember, reportDue } from "./report.js";
 import { selectPairs } from "./pairs.js";
 import { lookaheadCheck } from "./verify.js";
 import { diagnose } from "./diagnose.js";
@@ -52,7 +53,11 @@ Opciones generales:
 
 Por defecto todo funciona en modo simulado (paper trading), sin claves ni dinero real.`;
 
-const log = (msg: string) => console.log(`[${new Date().toISOString().slice(0, 19).replace("T", " ")}] ${msg}`);
+const log = (msg: string) => {
+  const line = `[${new Date().toISOString().slice(0, 19).replace("T", " ")}] ${msg}`;
+  remember(line);
+  console.log(line);
+};
 const DAY = 86_400_000;
 
 async function scan(config: Config, markets: Market[]): Promise<void> {
@@ -461,7 +466,33 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const auto = config.crypto.autoPairs;
   let updatesAt = 0;
   let announced = "";
+  const reporter = telegramReporter(config.telegram.enabled, log);
+  const sendReport = async (): Promise<boolean> => {
+    if (!reporter) return false;
+    const now = Date.now();
+    const version = await currentVersion(process.cwd());
+    const body = {
+      generado: new Date(now).toISOString(),
+      version,
+      config: path,
+      estado: bot.summary(now),
+      cuentas: state.papers,
+      posiciones: state.positions,
+      operaciones: state.recentTrades,
+      pausas: { manual: state.manualPause ?? false, protecciones: state.protections, riesgo: state.risk },
+      mercados: bot.markets.map((m) => ({ id: m.id, estrategia: m.strategyName, parametros: m.strategy, pausa: m.paused ?? false })),
+      aprendizaje: loadLearning(config.dataDir),
+      adaptativo: adaptiveState,
+      registro: logTail,
+    };
+    const ok = await reporter(`informe-${body.generado.slice(0, 16).replace(":", "")}.json`, JSON.stringify(body, null, 1), caption(`📊 Informe para Claude (${describeVersion(version)})\n${body.estado}`));
+    if (ok) markReported(config.dataDir, now);
+    return ok;
+  };
+  let rounds = 0;
   const beforeTick = async () => {
+    // From the second round on, so the report carries account values from a full round.
+    if (!once && ++rounds > 1 && reportDue(config.dataDir, config.telegram.reportHours, Date.now())) await sendReport();
     if (!once && Date.now() - updatesAt >= UPDATE_CHECK_HOURS * 3_600_000) {
       updatesAt = Date.now();
       const pending = await pendingUpdates(process.cwd());
@@ -501,6 +532,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const controller = new AbortController();
   // /actualizar: install the new commits; under the supervisor, stop so it starts the new version.
   const onCommand = async (c: Command): Promise<string | undefined> => {
+    if (c.name === "informe") return (await sendReport()) ? "📌 Informe publicado y fijado para Claude." : "❌ No se pudo publicar el informe (revisa el registro).";
     if (c.name !== "actualizar") return undefined;
     await notify("⏳ Buscando mejoras en GitHub… (instalarlas tarda un par de minutos)");
     try {

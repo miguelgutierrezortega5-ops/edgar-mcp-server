@@ -134,7 +134,14 @@ const configSchema = z
       })
       .strict()
       .default({}),
-    telegram: z.object({ enabled: z.boolean().default(true) }).strict().default({}),
+    telegram: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Hours between reports for Claude (pinned JSON file in the chat); 0 = only on /informe. */
+        reportHours: z.number().min(0).default(24),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 

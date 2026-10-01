@@ -145,8 +145,22 @@ Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env`, el bot avisa de cada op
 | `/reanudar` | Quita la pausa manual, la de protecciones y la parada por pérdidas |
 | `/cerrar BTC` o `/cerrar todo` | Cierra a mercado |
 | `/actualizar` | Instala las mejoras nuevas del bot y lo reinicia con ellas |
+| `/informe` | Publica ya el informe detallado para Claude (ver abajo) |
 
 Los mensajes enviados mientras el bot estaba apagado se descartan, no se ejecutan.
+
+### Informe diario para Claude
+
+Una vez al día, y cuando escribes `/informe`, el bot manda al chat un archivo `informe-….json` y lo deja fijado, sin sonido. El archivo incluye:
+
+- saldo y posiciones;
+- las últimas operaciones;
+- pausas;
+- parámetros y lo aprendido;
+- la capa adaptativa;
+- las últimas 400 líneas del registro, que dicen qué señales ignoró y por qué.
+
+No contiene claves ni tokens. Con el token del bot, Claude lee el último informe fijado (`node scripts/leer-informe.mjs`) y aprende de lo que pasa en tu celular, que es la copia con futuros en vivo. Telegram no deja que un bot lea los mensajes que él mismo envió, así que el archivo fijado es la forma de que llegue. Para cambiar la frecuencia, usa `telegram.reportHours` en la configuración; con `0` solo se publica con `/informe`.
 
 ### Mejoras nuevas
 
