@@ -36,6 +36,37 @@ cp config.example.json config.json
 cp .env.example .env             # solo si vas a usar claves o Telegram
 ```
 
+## Ejecutarlo desde México (o desde cualquier país donde opere Binance)
+
+Binance responde "451: ubicación restringida" a los equipos de EE. UU. y otros países donde no opera. Desde un equipo en México funcionan los futuros en vivo y las órdenes en Binance (testnet o real). Comprueba qué responde desde tu equipo:
+
+```bash
+npm run diagnostico
+```
+
+```
+✓ Binance datos de mercado (spot): OK
+✓ Binance API de órdenes (spot): OK
+✓ Binance futuros en vivo: OK
+✓ Binance archivo histórico: OK
+✓ Yahoo Finance (divisas): OK
+```
+
+Pasos en tu computadora (Windows, Mac o Linux):
+
+1. Instala [Node.js 22](https://nodejs.org) y [Git](https://git-scm.com/downloads).
+2. Descarga el proyecto y entra al bot:
+   ```bash
+   git clone https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server.git
+   cd edgar-mcp-server/trading-bot
+   npm install
+   npm run diagnostico
+   ```
+3. Arranca el reto de 50 USD (simulado): `npm run bot -- --config config.reto50.json`.
+4. Opcional: pon `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env` para recibir avisos y controlarlo desde el teléfono (`/estado`).
+
+El equipo tiene que estar encendido para que el bot opere. Para tenerlo siempre activo, usa un servidor o una Raspberry Pi en México con Docker o pm2 (ver [Tenerlo en marcha 24/7](#tenerlo-en-marcha-247)).
+
 ## Uso
 
 ```bash
@@ -44,6 +75,7 @@ npm run estudiar    # qué patrones de ballenas funcionan con datos recientes
 npm run aprender    # reajusta parámetros y decide qué mercados operar (2-4 min)
 npm run backtest    # cómo le habría ido con la configuración actual (cuenta compartida)
 npm run verificar   # comprueba que las estrategias no miran al futuro
+npm run diagnostico # qué fuentes y brokers responden desde este equipo
 npm run bot         # arranca el bot (vuelve a aprender cada 24 h); Ctrl+C para pararlo
 npm run status      # saldo, posiciones, operaciones, aprendizaje y límites
 ```

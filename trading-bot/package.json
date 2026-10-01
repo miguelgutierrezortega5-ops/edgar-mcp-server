@@ -17,6 +17,7 @@
     "estudiar": "node dist/index.js estudiar",
     "aprender": "node dist/index.js aprender",
     "verificar": "node dist/index.js verificar",
+    "diagnostico": "node dist/index.js diagnostico",
     "test": "npm run build && node --test"
   },
   "engines": {

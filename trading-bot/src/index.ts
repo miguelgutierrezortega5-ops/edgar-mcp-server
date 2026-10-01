@@ -10,6 +10,7 @@ import * as fmt from "./fmt.js";
 import { telegramCommands, telegramNotifier } from "./notify.js";
 import { selectPairs } from "./pairs.js";
 import { lookaheadCheck } from "./verify.js";
+import { diagnose } from "./diagnose.js";
 import { assess, collectOutcomes, describeArm, loadAdaptive, saveAdaptive, type AdaptiveState } from "./adaptive.js";
 import { hurst, regimeName } from "./quant.js";
 import { FuturesSource, openInterestChange, type FuturesPoint } from "./data/futures.js";
@@ -38,6 +39,7 @@ Comandos:
       --temporalidad 3m    Solo los mercados de esa temporalidad (por defecto la más usada)
   aprender                 Reajusta los parámetros con datos recientes y los valida en datos no vistos;
                            pausa los mercados donde ninguna configuración gana
+  diagnostico              Comprueba desde dónde se ejecuta qué fuentes y brokers responden (p. ej. futuros en vivo)
   verificar                Comprueba que ninguna estrategia mira al futuro (sesgo de anticipación)
   run (o bot)              Arranca el bot: vigila los mercados, opera y vuelve a aprender cada 24 h
       --once               Hace una sola pasada y termina (útil con cron)
@@ -529,6 +531,13 @@ async function main(): Promise<void> {
     return;
   }
   if (existsSync(".env")) process.loadEnvFile(".env");
+  if (command === "diagnostico") {
+    const checks = await diagnose();
+    for (const c of checks) console.log(`${c.ok ? "✓" : "✗"} ${c.name}: ${c.detail}${c.ok ? "" : ` → ${c.impact}`}`);
+    const blocked = checks.some((c) => c.detail.includes("451"));
+    console.log(blocked ? "\nBinance no da servicio desde la ubicación de este equipo. Ejecuta el bot desde un país donde opere (por ejemplo, México)." : "\nTodo lo necesario responde desde aquí.");
+    return;
+  }
   const { config, markets: manual, path } = loadConfig(values.config);
   const markets = await withAutoPairs(config, manual);
   if (!markets.length) throw new Error("No hay mercados: añádelos en la configuración o activa crypto.autoPairs");

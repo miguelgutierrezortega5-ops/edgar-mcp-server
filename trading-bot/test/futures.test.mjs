@@ -120,3 +120,16 @@ test("adaptive sizing by context is opt-in; by default the whole group decides",
   assert.equal(scaleFor(state, m, "flujo normal, liquidaciones o cierres", true).scale, 1);
   assert.equal(scaleFor(state, m, "futuros ?", true).arm.context, "*"); // unknown values carry no evidence
 });
+
+test("diagnostico names geo-blocked Binance endpoints and what the bot loses", async () => {
+  const { diagnose } = await import("../dist/diagnose.js");
+  globalThis.fetch = async (url) =>
+    String(url).includes("binance.com") ? new Response('{"code":0,"msg":"Service unavailable from a restricted location"}', { status: 451 }) : new Response("{}", { status: 200 });
+  const checks = await diagnose({});
+  const fut = checks.find((c) => c.name === "Binance futuros en vivo");
+  assert.equal(fut.ok, false);
+  assert.match(fut.detail, /451/);
+  assert.match(fut.impact, /archivo diario/);
+  assert.ok(checks.find((c) => c.name === "Binance datos de mercado (spot)").ok);
+  assert.ok(!checks.some((c) => c.name === "Telegram"));
+});
