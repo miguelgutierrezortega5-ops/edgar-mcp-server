@@ -8,7 +8,7 @@ case "${1:-}" in
     echo "Registro en vivo (Ctrl+C para salir):"; exec tail -n 30 -f "$D/../../data/bot.log" ;;
   telegram)
     cd "$D/../.." && node scripts/android/telegram.mjs || exit 1
-    if pgrep -f "dist/index.js run" >/dev/null; then bash "$D/detener.sh" && bash "$D/iniciar.sh"; fi ;;
+    if pgrep -f "android/supervisor.sh|dist/index.js run" >/dev/null; then bash "$D/detener.sh" && bash "$D/iniciar.sh"; fi ;;
   arranque)
     if [ "${2:-si}" = no ]; then rm -f "$HOME/.termux/boot/trading-bot"; echo "Ya no arrancará al encender el teléfono."; exit 0; fi
     mkdir -p "$HOME/.termux/boot"

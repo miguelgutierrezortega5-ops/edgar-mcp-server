@@ -7,7 +7,8 @@ import { loadConfig, makeMarket, type Config } from "./config.js";
 import { quoteRate, rateFunction } from "./data/source.js";
 import { Bot, historyStart } from "./engine.js";
 import * as fmt from "./fmt.js";
-import { telegramCommands, telegramNotifier } from "./notify.js";
+import { applyUpdate, currentVersion, describeVersion, listUpdates, pendingUpdates, RESTART_CODE, UPDATE_CHECK_HOURS } from "./update.js";
+import { telegramCommands, telegramNotifier, type Command } from "./notify.js";
 import { selectPairs } from "./pairs.js";
 import { lookaheadCheck } from "./verify.js";
 import { diagnose } from "./diagnose.js";
@@ -458,7 +459,18 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   applyLearning(markets, loadLearning(config.dataDir)).forEach((l) => log(l));
   let pairsAt = Date.now();
   const auto = config.crypto.autoPairs;
+  let updatesAt = 0;
+  let announced = "";
   const beforeTick = async () => {
+    if (!once && Date.now() - updatesAt >= UPDATE_CHECK_HOURS * 3_600_000) {
+      updatesAt = Date.now();
+      const pending = await pendingUpdates(process.cwd());
+      if (pending?.length && pending.join("\n") !== announced) {
+        announced = pending.join("\n");
+        log(`Hay ${pending.length} mejoras nuevas en GitHub (/actualizar en Telegram o bot actualizar en Termux)`);
+        await notify(`🆕 Hay ${pending.length} mejora(s) nueva(s) del bot:\n${listUpdates(pending)}\nEscribe /actualizar para instalarlas.`);
+      }
+    }
     if (auto.enabled && Date.now() - pairsAt >= auto.refreshHours * 3_600_000) {
       pairsAt = Date.now();
       try {
@@ -486,7 +498,24 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   let adaptiveState = config.adaptive.enabled ? loadAdaptive(config.dataDir) : null;
   const fsLive = futuresSource(config);
   const futuresFor = fsLive ? (m: Market, since: number) => fsLive.metrics(futuresSymbol(m), since) : undefined;
-  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log), adaptive: () => adaptiveState, futures: futuresFor });
+  const controller = new AbortController();
+  // /actualizar: install the new commits; under the supervisor, stop so it starts the new version.
+  const onCommand = async (c: Command): Promise<string | undefined> => {
+    if (c.name !== "actualizar") return undefined;
+    await notify("⏳ Buscando mejoras en GitHub… (instalarlas tarda un par de minutos)");
+    try {
+      const done = await applyUpdate(process.cwd());
+      if (!done.length) return `✅ Ya tienes la última ${describeVersion(await currentVersion(process.cwd()))}.`;
+      const text = `✅ Instaladas ${done.length} mejora(s):\n${listUpdates(done)}`;
+      if (!process.env.BOT_SUPERVISOR) return `${text}\nReinicia el bot para usarlas (en Termux: bot detener y bot iniciar).`;
+      exitCode = RESTART_CODE;
+      controller.abort();
+      return `${text}\n🔄 Reiniciando con la versión nueva…`;
+    } catch (err) {
+      return `❌ No se pudo actualizar: ${(err as Error).message}\nEn Termux puedes probar: bot actualizar`;
+    }
+  };
+  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log), onCommand, adaptive: () => adaptiveState, futures: futuresFor });
 
   log(`Configuración: ${path}. Revisión cada ${config.pollSeconds} s.`);
   for (const m of markets) {
@@ -500,14 +529,13 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
     await bot.tick();
     return;
   }
-  const controller = new AbortController();
   const stop = () => {
     log("Deteniendo el bot (las posiciones abiertas se mantienen)…");
     controller.abort();
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
-  await notify(`🤖 Bot iniciado: ${markets.map((m) => m.id).join(", ")}`);
+  await notify(`🤖 Bot iniciado (${describeVersion(await currentVersion(process.cwd()))}): ${markets.map((m) => m.id).join(", ")}`);
   await bot.run(controller.signal);
 }
 
@@ -569,8 +597,11 @@ async function main(): Promise<void> {
   }
 }
 
+/** RESTART_CODE after /actualizar, so the supervisor starts the new version. */
+let exitCode = 0;
+
 main().then(
-  () => process.exit(0),
+  () => process.exit(exitCode),
   (err) => {
     console.error(`Error: ${(err as Error).message}`);
     process.exit(1);

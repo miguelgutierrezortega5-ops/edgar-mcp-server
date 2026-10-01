@@ -29,13 +29,15 @@ export interface BotDeps {
   beforeTick?: () => Promise<void>;
   /** Pending remote commands (Telegram). */
   commands?: () => Promise<Command[]>;
+  /** Handles commands the engine does not know (e.g. /actualizar); undefined = unknown command. */
+  onCommand?: (c: Command) => Promise<string | undefined>;
   /** Latest adaptive evidence; null or absent = static rules only. */
   adaptive?: () => AdaptiveState | null;
   /** Binance futures positioning of a market since a time (absent when not available). */
   futures?: (m: Market, since: number) => Promise<FuturesPoint[]>;
 }
 
-export const COMMAND_HELP = "/estado — saldo, posiciones y pausas\n/pausa — no abrir operaciones nuevas\n/reanudar — quitar pausas y paradas por pérdidas\n/cerrar SIMBOLO|todo — cerrar a mercado\n/ayuda";
+export const COMMAND_HELP = "/estado — saldo, posiciones y pausas\n/pausa — no abrir operaciones nuevas\n/reanudar — quitar pausas y paradas por pérdidas\n/cerrar SIMBOLO|todo — cerrar a mercado\n/actualizar — instalar las mejoras nuevas del bot\n/ayuda";
 
 const MAX_RECENT_TRADES = 100;
 
@@ -144,7 +146,7 @@ export class Bot {
         }
         reply = hits.length ? `Cerradas ${hits.length} posiciones.` : `No hay posiciones en ${target || "(falta el símbolo)"}.`;
       } else if (c.name === "estado") reply = this.summary(now);
-      else reply = COMMAND_HELP;
+      else reply = (await this.d.onCommand?.(c)) ?? COMMAND_HELP;
       this.d.log(`Telegram /${c.name}: ${reply.split("\n")[0]}`);
       await this.d.notify(reply);
     }

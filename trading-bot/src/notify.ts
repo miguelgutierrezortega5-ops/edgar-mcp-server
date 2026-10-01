@@ -1,5 +1,7 @@
 export type Notifier = (text: string) => Promise<void>;
 
+const api = () => process.env.TELEGRAM_API_URL ?? "https://api.telegram.org";
+
 /** Telegram notifications when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set; otherwise a no-op. */
 export function telegramNotifier(enabled: boolean, log: (msg: string) => void): Notifier {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -7,7 +9,7 @@ export function telegramNotifier(enabled: boolean, log: (msg: string) => void): 
   if (!enabled || !token || !chatId) return async () => {};
   return async (text) => {
     try {
-      const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      const res = await fetch(`${api()}/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
@@ -37,7 +39,7 @@ export function telegramCommands(enabled: boolean, log: (msg: string) => void): 
   let primed = false;
   return async () => {
     try {
-      const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?timeout=0&offset=${offset}`, { signal: AbortSignal.timeout(10_000) });
+      const res = await fetch(`${api()}/bot${token}/getUpdates?timeout=0&offset=${offset}`, { signal: AbortSignal.timeout(10_000) });
       if (!res.ok) return [];
       const body = (await res.json()) as { result?: { update_id: number; message?: { chat?: { id: number }; text?: string } }[] };
       const out: Command[] = [];
