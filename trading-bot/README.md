@@ -144,8 +144,15 @@ Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env`, el bot avisa de cada op
 | `/pausa` | Deja de abrir operaciones (las abiertas siguen con su stop y objetivo) |
 | `/reanudar` | Quita la pausa manual, la de protecciones y la parada por pérdidas |
 | `/cerrar BTC` o `/cerrar todo` | Cierra a mercado |
+| `/actualizar` | Instala las mejoras nuevas del bot y lo reinicia con ellas |
 
 Los mensajes enviados mientras el bot estaba apagado se descartan, no se ejecutan.
+
+### Mejoras nuevas
+
+Cada mejora del bot (estrategias, aprendizajes, correcciones) se publica en la rama de GitHub de la que se instaló. Cada 6 horas el bot mira si hay mejoras nuevas y, si las hay, te avisa por Telegram con la lista. Escribe `/actualizar` para instalarlas: el bot las descarga, se recompila (un par de minutos) y se reinicia solo con la versión nueva. El saldo simulado, las posiciones y lo que el bot aprendió se conservan, porque están en `data/`, que las actualizaciones no tocan. Nada se instala sin tu `/actualizar`.
+
+El reinicio automático lo hace `scripts/android/supervisor.sh`, que arranca `bot iniciar`. Si el bot se cae, el supervisor lo vuelve a arrancar al minuto, y lo deja detenido tras 5 caídas seguidas. Sin supervisor, por ejemplo con `npm run bot`, `/actualizar` instala la versión nueva y pide reiniciar a mano. Desde Termux también se puede con `bot actualizar`.
 
 ## Algoritmos y lo que midieron
 
