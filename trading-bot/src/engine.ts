@@ -3,6 +3,7 @@ import type { Config } from "./config.js";
 import { quoteRate, type CandleSource, type FxRates } from "./data/source.js";
 import * as fmt from "./fmt.js";
 import type { Command, Notifier } from "./notify.js";
+import { contexts, describeArm, scaleFor, type AdaptiveState } from "./adaptive.js";
 import { blocked, onClose } from "./protections.js";
 import { averageBarValue, canOpen, newRiskState, positionSize, updateRisk } from "./risk.js";
 import { checkStops, trailStop, type Bar } from "./stops.js";
@@ -26,6 +27,8 @@ export interface BotDeps {
   beforeTick?: () => Promise<void>;
   /** Pending remote commands (Telegram). */
   commands?: () => Promise<Command[]>;
+  /** Latest adaptive evidence; null or absent = static rules only. */
+  adaptive?: () => AdaptiveState | null;
 }
 
 export const COMMAND_HELP = "/estado — saldo, posiciones y pausas\n/pausa — no abrir operaciones nuevas\n/reanudar — quitar pausas y paradas por pérdidas\n/cerrar SIMBOLO|todo — cerrar a mercado\n/ayuda";
@@ -50,6 +53,11 @@ export class Bot {
   constructor(private readonly d: BotDeps) {
     this.now = d.now ?? Date.now;
     this.marketById = new Map(d.markets.map((m) => [m.id, m]));
+  }
+
+  /** Markets currently watched (the list changes with automatic pairs). */
+  get markets(): Market[] {
+    return this.d.markets;
   }
 
   private get state(): BotState {
@@ -311,7 +319,9 @@ export class Bot {
     const guard = blocked(this.state.protections, m.id, now);
     if (guard) return this.d.log(`${label} ignorada: ${guard}`);
 
-    const size = positionSize({
+    const { scale, arm } = scaleFor(this.d.adaptive?.() ?? null, m, contexts(closed).at(-1) ?? "?");
+    if (!(scale > 0)) return this.d.log(`${label} ignorada: la evidencia reciente no respalda este contexto (${arm ? describeArm(arm) : "?"})`);
+    const size = scale * positionSize({
       equity,
       price: mark.price,
       stopDistance: entry.stopDistance,

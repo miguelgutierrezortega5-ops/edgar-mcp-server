@@ -1,3 +1,4 @@
+import { amihud, kyleLambda, rollingPercentile, vpin } from "./quant.js";
 import { referenceMove, relativeVolume } from "./strategies/capitulation.js";
 import type { Candle } from "./types.js";
 
@@ -18,6 +19,12 @@ export interface Features {
   delta: number[];
   /** % move of the reference market (BTC) over the last 10 bars; NaN without reference data. */
   marketMove: number[];
+  /** Percentiles (0-1) against the market's recent history: order-flow toxicity, price impact, illiquidity. */
+  vpinPct: number[];
+  kylePct: number[];
+  amihudPct: number[];
+  /** Net aggressive volume of the last 20 bars (buys - sells). */
+  delta20: number[];
 }
 
 export function features(candles: Candle[], reference?: Candle[], swing = 60, volumeAvg = 50): Features {
@@ -31,7 +38,19 @@ export function features(candles: Candle[], reference?: Candle[], swing = 60, vo
     priorHigh: [],
     delta: [],
     marketMove: referenceMove(candles, reference, 10),
+    vpinPct: [],
+    kylePct: rollingPercentile(kyleLambda(candles, 60), 1000),
+    amihudPct: rollingPercentile(amihud(candles, 60), 1000),
+    delta20: [],
   };
+  const volumes = candles.map((c) => c.volume).sort((a, b) => a - b);
+  f.vpinPct = rollingPercentile(vpin(candles, (volumes[Math.floor(n / 2)] ?? 0) * 10, 50), 1000);
+  let d20 = 0;
+  candles.forEach((c, i) => {
+    const d = (b: Candle) => (b.takerBuy === undefined ? 0 : 2 * b.takerBuy - b.volume);
+    d20 += d(c) - (i >= 20 ? d(candles[i - 20]) : 0);
+    f.delta20.push(d20);
+  });
   let delta = 0;
   for (let i = 0; i < n; i++) {
     const c = candles[i];
@@ -106,6 +125,25 @@ export const PATTERNS: Pattern[] = [
     needsTakerVolume: true,
     test: (f, i) => i > 20 && f.candles[i].close < Math.min(...f.candles.slice(Math.max(0, i - 60), i - 20).map((c) => c.low)) && f.delta[i] > 0,
   },
+  {
+    name: "VPIN alto + venta",
+    meaning: "flujo tóxico (VPIN en su 10% más alto) dominado por ventas agresivas: alguien informado vende",
+    needsTakerVolume: true,
+    test: (f, i) => f.vpinPct[i] > 0.9 && f.delta20[i] < 0,
+  },
+  {
+    name: "VPIN alto + compra",
+    meaning: "flujo tóxico dominado por compras agresivas: alguien informado compra",
+    needsTakerVolume: true,
+    test: (f, i) => f.vpinPct[i] > 0.9 && f.delta20[i] > 0,
+  },
+  {
+    name: "libro fino (Kyle alto)",
+    meaning: "cada unidad de volumen mueve mucho el precio: fácil de manipular",
+    needsTakerVolume: true,
+    test: (f, i) => f.kylePct[i] > 0.9,
+  },
+  { name: "iliquidez alta (Amihud)", meaning: "el precio se mueve mucho para lo poco que se negocia", test: (f, i) => f.amihudPct[i] > 0.9 },
   {
     name: "ruptura con compras",
     meaning: "rompe el máximo reciente con compras agresivas (perseguir la subida)",

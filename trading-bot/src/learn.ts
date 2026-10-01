@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { simulate } from "./backtest.js";
 import type { Config } from "./config.js";
 import { rateFunction, type FxRates } from "./data/source.js";
+import { deflatedSharpe } from "./quant.js";
 import { referenceMarket, STRATEGIES, strategyOf } from "./strategy.js";
 import { closedCandles, TIMEFRAME_MS } from "./timeframes.js";
 import type { Candle, ClosedTrade, Market, StrategyName, StrategyParams } from "./types.js";
@@ -38,6 +39,11 @@ export interface LearnedGroup {
   test: Stats;
   /** How the parameters in the configuration did on the same unseen data. */
   currentTest: Stats;
+  /**
+   * Deflated Sharpe ratio of the best combination in the search: probability that its edge is real
+   * and not the luck of trying many combinations. New parameters need at least MIN_DSR.
+   */
+  dsr: number;
   decision: "nuevos" | "actuales" | "pausa" | "sin muestra";
   note: string;
 }
@@ -50,18 +56,23 @@ export interface LearnState {
   groups: LearnedGroup[];
 }
 
+/** Result per UTC day of entry, oldest first. */
+export function dailyResults(trades: Pick<ClosedTrade, "openedAt" | "pnl">[]): number[] {
+  const byDay = new Map<string, number>();
+  for (const t of trades) {
+    const day = new Date(t.openedAt).toISOString().slice(0, 10);
+    byDay.set(day, (byDay.get(day) ?? 0) + t.pnl);
+  }
+  return [...byDay].sort((a, b) => a[0].localeCompare(b[0])).map(([, v]) => v);
+}
+
 export function stats(trades: ClosedTrade[]): Stats {
   const n = trades.length;
   const pnl = trades.reduce((s, t) => s + t.pnl, 0);
   const wins = trades.filter((t) => t.pnl > 0);
   const gw = wins.reduce((s, t) => s + t.pnl, 0);
   const gl = gw - pnl;
-  const byDay = new Map<string, number>();
-  for (const t of trades) {
-    const day = new Date(t.openedAt).toISOString().slice(0, 10);
-    byDay.set(day, (byDay.get(day) ?? 0) + t.pnl);
-  }
-  const daily = [...byDay.values()];
+  const daily = dailyResults(trades);
   const d = daily.length;
   const mean = d ? pnl / d : 0;
   const sd = d > 1 ? Math.sqrt(daily.reduce((s, x) => s + (x - mean) ** 2, 0) / (d - 1)) : 0;
@@ -75,6 +86,7 @@ export function combinations(grid: Record<string, number[]>): StrategyParams[] {
 
 /** Fewest distinct trading days that count as evidence, in the search and in the validation. */
 const MIN_DAYS = 8;
+const MIN_DSR = 0.9;
 
 interface Prepared {
   market: Market;
@@ -135,37 +147,56 @@ export async function learn(o: LearnOptions): Promise<LearnState> {
 
     // One shared account for the group, as in live trading: the position limit and the protections
     // decide which of a dozen simultaneous signals get traded.
-    const run = (overrides: StrategyParams, tradeFrom: number, tradeUntil?: number) => {
+    const runDaily = (overrides: StrategyParams, tradeFrom: number, tradeUntil?: number) => {
       try {
         const series = data.map(({ market, candles, rateAt }) => ({ market: { ...market, strategy: { ...market.strategy, ...overrides } }, candles, rateAt, context: { reference } }));
-        return stats(simulate({ series, risk: config.risk, costs: config.paper, startingBalance: config.paper.startingBalance, tradeFrom, tradeUntil, protections: config.protections }).trades);
+        const trades = simulate({ series, risk: config.risk, costs: config.paper, startingBalance: config.paper.startingBalance, tradeFrom, tradeUntil, protections: config.protections }).trades;
+        return { stats: stats(trades), daily: dailyResults(trades) };
       } catch {
-        return stats([]);
+        return { stats: stats([]), daily: [] };
       }
     };
+    const run = (overrides: StrategyParams, tradeFrom: number, tradeUntil?: number) => runDaily(overrides, tradeFrom, tradeUntil).stats;
 
     const impl = STRATEGIES[markets[0].strategyName];
     const candidates = combinations(impl.grid).filter((c) => !impl.validate({ ...markets[0].strategy, ...c }));
-    let best: { params: StrategyParams; train: Stats } | null = null;
+    let best: { params: StrategyParams; train: Stats; daily: number[] } | null = null;
+    const sharpes: number[] = [];
     for (const params of candidates) {
-      const train = run(params, from, split);
-      if (train.trades >= L.minTrades && train.days >= MIN_DAYS && train.pnl > 0 && (!best || train.tStat > best.train.tStat)) best = { params, train };
+      const { stats: train, daily } = runDaily(params, from, split);
+      if (daily.length > 2) {
+        const m = daily.reduce((a, b) => a + b, 0) / daily.length;
+        const sd = Math.sqrt(daily.reduce((a, b) => a + (b - m) ** 2, 0) / (daily.length - 1));
+        if (sd > 0) sharpes.push(m / sd);
+      }
+      if (train.trades >= L.minTrades && train.days >= MIN_DAYS && train.pnl > 0 && (!best || train.tStat > best.train.tStat)) best = { params, train, daily };
     }
+    const meanSr = sharpes.reduce((a, b) => a + b, 0) / Math.max(1, sharpes.length);
+    const srVariance = sharpes.length > 1 ? sharpes.reduce((a, b) => a + (b - meanSr) ** 2, 0) / (sharpes.length - 1) : undefined;
+    const dsr = best ? deflatedSharpe(best.daily, candidates.length, srVariance) : 0;
     const current = Object.fromEntries(Object.keys(impl.grid).map((k) => [k, markets[0].strategy[k]]));
     const currentTest = run({}, split);
     const minTest = Math.max(5, Math.round((L.minTrades * L.testPct) / (100 - L.testPct)));
     const passes = (s: Stats) => s.trades >= minTest && s.days >= MIN_DAYS && s.pnl > 0 && s.profitFactor >= L.minProfitFactor;
 
     let group: LearnedGroup;
-    const base = { key, strategy: markets[0].strategyName, timeframe: markets[0].timeframe, markets: data.map((d) => d.market.id), currentTest };
+    const base = { key, strategy: markets[0].strategyName, timeframe: markets[0].timeframe, markets: data.map((d) => d.market.id), currentTest, dsr };
     if (best) {
       const test = run(best.params, split);
-      if (passes(test)) group = { ...base, params: best.params, train: best.train, test, decision: "nuevos", note: "los mejores parámetros del pasado también ganan en datos no vistos" };
-      else if (passes(currentTest)) group = { ...base, params: current, train: run({}, from, split), test: currentTest, decision: "actuales", note: "los nuevos no aguantan en datos no vistos; los actuales sí" };
+      if (passes(test) && dsr >= MIN_DSR) group = { ...base, params: best.params, train: best.train, test, decision: "nuevos", note: "los mejores parámetros del pasado también ganan en datos no vistos y superan el ratio de Sharpe deflactado" };
+      else if (passes(currentTest)) {
+        const why = passes(test) ? `los nuevos podrían ser suerte (Sharpe deflactado ${dsr.toFixed(2)} < ${MIN_DSR})` : "los nuevos no aguantan en datos no vistos";
+        group = { ...base, params: current, train: run({}, from, split), test: currentTest, decision: "actuales", note: `${why}; los actuales sí ganan` };
+      }
       else if (Math.max(test.days, currentTest.days) < MIN_DAYS || (test.trades < minTest && currentTest.trades < minTest)) {
         group = { ...base, params: current, train: best.train, test, decision: "sin muestra", note: `menos de ${minTest} operaciones o ${MIN_DAYS} días con operaciones para validar` };
       }
-      else group = { ...base, params: current, train: best.train, test, decision: "pausa", note: "ninguna configuración gana en datos no vistos" };
+      else {
+        const note = passes(test)
+          ? `la mejor combinación gana en validación, pero con ${candidates.length} combinaciones probadas puede ser suerte (Sharpe deflactado ${dsr.toFixed(2)} < ${MIN_DSR}) y los actuales pierden`
+          : "ninguna configuración gana en datos no vistos";
+        group = { ...base, params: current, train: best.train, test, decision: "pausa", note };
+      }
     } else {
       const train = run({}, from, split);
       group =
@@ -215,6 +246,6 @@ export function describeLearning(state: LearnState, ccy: string): string[] {
   return state.groups.flatMap((g) => [
     `${g.key} (${g.markets.length} mercados) → ${g.decision.toUpperCase()}: ${g.note}`,
     `   parámetros ${JSON.stringify(g.params)}`,
-    `   aprendizaje ${s(g.train)} | validación ${s(g.test)} | actuales en validación ${s(g.currentTest)}`,
+    `   aprendizaje ${s(g.train)} | validación ${s(g.test)} | actuales en validación ${s(g.currentTest)} | Sharpe deflactado del mejor ${(g.dsr ?? 0).toFixed(2)}`,
   ]);
 }

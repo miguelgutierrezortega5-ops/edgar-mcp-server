@@ -29,10 +29,17 @@ Token-efficient workflow: put research scripts in the scratchpad, cache klines t
 - Always judge with the portfolio simulator (`simulate`, one shared account, `maxOpenPositions`): per-market backtests overstated capitulation (PF 2.17 → 1.36 shared). Protections (cooldown 20 bars, 3 stop-losses in 60 min → 4 h pause) brought it to PF 1.88, max drawdown 2.4%, +7.7% in 150 days.
 - Keep losing strategies out of a shared account: they take the position slots and trip the drawdown halt. Crypto and forex now have separate paper accounts.
 
+- Microstructure algorithms (src/quant.ts), measured May-Oct 2026: VPIN, Kyle's lambda, Amihud alone have no stable edge (they track each period's drift). As context for capitulation: high VPIN helped and high Amihud hurt in both halves, but with 9-35 cases. Hurst's relation to capitulation flipped sign between halves: do not use it as a filter.
+- The adaptive layer (decayed evidence per strategy x context, half-life 30 days) did not raise returns over a period where the edge held (+7.26% vs +7.65%); with a 10-day half-life it cost 3 points. Treat it as insurance, and re-measure it when the edge fades.
+- Deflated Sharpe of the learner's best combination: 0.42 (capitulation, 216 trials) and 0.08 (forex EMA, 108 trials): grid winners were mostly luck.
+- The user insists that nothing in this market is a law: present every finding as "measured in period X", keep re-measuring, and prefer mechanisms that adapt over hard-coded filters.
+
 ## Ideas not yet tested
 
 - Futures data from Mexico: liquidations, funding, open interest, top-trader long/short ratio, to confirm cascades.
 - Order-book imbalance and spoofing (`/api/v3/depth`), live only (no history).
+- Volume/dollar bars and CUSUM event sampling, fractional differentiation, triple-barrier labels and meta-labeling (López de Prado). The adaptive layer is a simple form of meta-labeling.
+- Public quant repos could not be added to the session (the add_repo request was denied by the permission system); ask the user to allow it before trying again.
 - Stop-loss resting on Binance (STOP_LOSS_LIMIT / OCO) so positions stay protected with the bot off; needs testnet keys from a non-US connection.
 
 Update the findings above when a study changes them.

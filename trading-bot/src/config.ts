@@ -63,6 +63,19 @@ const configSchema = z
       })
       .strict()
       .default({}),
+    /** Recent evidence per strategy and market context scales or switches off entries (see adaptive.ts). */
+    adaptive: z
+      .object({
+        enabled: z.boolean().default(true),
+        everyHours: z.number().positive().default(4),
+        windowDays: z.number().positive().max(365).default(60),
+        halfLifeDays: z.number().positive().default(30),
+        priorTrades: z.number().min(0).default(5),
+        minProbability: z.number().min(0.5).max(0.99).default(0.55),
+        fullProbability: z.number().min(0.5).max(0.999).default(0.7),
+      })
+      .strict()
+      .default({}),
     /** Overrides of each strategy's default parameters, for all markets that use it. */
     strategies: z.object(Object.fromEntries(STRATEGY_NAMES.map((n) => [n, paramsSchema.optional()]))).strict().default({}),
     learning: z

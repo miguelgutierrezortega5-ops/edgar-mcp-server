@@ -12,6 +12,8 @@ Bot que vigila mercados de cripto y forex, **estudia las huellas que dejan las b
   - `cruce_medias`, de seguimiento de tendencia.
 - **Aprende**: cada 24 h prueba cientos de combinaciones de parámetros con el historial reciente y solo adopta una si también gana en el tramo más reciente, que no se usó para elegirla. Si nada gana, **pone el mercado en pausa** (lo vigila pero no opera).
 - **Estudia**: `npm run estudiar` mide qué hizo el precio tras cada huella de ballena, para comprobar si un patrón sigue funcionando.
+- **No da nada por sentado**: una capa adaptativa puntúa cada 4 h el resultado reciente de cada estrategia según el contexto del mercado (toxicidad del flujo, liquidez). Usa memoria que se desvanece. Ajusta el tamaño con Kelly y apaga lo que deja de funcionar; si vuelve a funcionar, lo enciende.
+- **Usa algoritmos cuantitativos**: VPIN, lambda de Kyle, Amihud, exponente de Hurst, rendimientos logarítmicos, criterio de Kelly y ratio de Sharpe deflactado. Ver [Algoritmos](#algoritmos-y-lo-que-midieron).
 - **Se protege** como Freqtrade:
   - tras cerrar una operación, espera 20 velas antes de volver a operar esa moneda;
   - tras 3 stop-loss en una hora, deja de abrir operaciones durante 4 horas (una cascada que no rebota).
@@ -65,6 +67,20 @@ Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env`, el bot avisa de cada op
 | `/cerrar BTC` o `/cerrar todo` | Cierra a mercado |
 
 Los mensajes enviados mientras el bot estaba apagado se descartan, no se ejecutan.
+
+## Algoritmos y lo que midieron
+
+En este mercado no hay leyes fijas. Cada algoritmo se midió con 150 días de 16 pares de Binance en 3m, separando el periodo antiguo del reciente, y el bot los sigue midiendo:
+
+| Algoritmo | Qué mide | Resultado medido | Cómo lo usa el bot |
+| --- | --- | --- | --- |
+| **VPIN** (Easley, López de Prado y O'Hara) | Toxicidad del flujo: compras o ventas agresivas de un solo lado, típico de alguien informado | Por sí solo, sin ventaja estable. Las capitulaciones con VPIN alto rindieron más en ambos periodos (+0,4% y +2,0% frente a −0,0% y +1,2%), con pocos casos | Contexto de la capa adaptativa; columna en `scan`; huella en `estudiar` |
+| **Lambda de Kyle** | Cuánto mueve el precio cada unidad de volumen agresivo (libro fino, fácil de mover) | Sin ventaja estable por sí sola | Huella en `estudiar` |
+| **Amihud** | Iliquidez: movimiento del precio por unidad negociada | Las capitulaciones con iliquidez alta rindieron menos en ambos periodos, con pocos casos | Contexto de la capa adaptativa |
+| **Exponente de Hurst** (regresión log-log) | Régimen: tendencial (>0,55), aleatorio o que revierte (<0,45) | La relación con la capitulación **cambió de signo** entre periodos: no es fiable | Solo informativo (`scan`) |
+| **Rendimientos logarítmicos y Kelly** | Crecimiento compuesto; tamaño que maximiza el crecimiento logarítmico | — | La capa adaptativa no apuesta si Kelly ≤ 0 |
+| **Evidencia con memoria que se desvanece** + bayes empírico | Probabilidad de que un contexto tenga ventaja, dando más peso a lo reciente | En 150 días la ventaja se mantuvo, así que no mejoró el resultado. Es un seguro: con 30 días de memoria cuesta ~0,4%; con 10 días costaba 3% | Escala o apaga cada contexto |
+| **Ratio de Sharpe deflactado** (Bailey y López de Prado) | Si la mejor de N combinaciones es buena o solo suerte | La "mejor" combinación de 216 dio 0,42 en capitulación y 0,08 en divisas: probablemente suerte | El aprendizaje solo adopta parámetros nuevos con ≥ 0,9 |
 
 ## Comparación con otros bots
 
@@ -176,6 +192,7 @@ Los precios de cripto salen de `data-api.binance.vision`, el servicio público d
 | `crypto.exchange` | `binance` (por defecto), `kraken`, `bybit`, `okx`… |
 | `crypto.reference` | Mercado que indica si cae todo el mercado (`BTC/USDT`) |
 | `crypto.autoPairs` | `enabled`, volumen diario (`minVolumeUsd`, `maxVolumeUsd`), `maxSpreadPct`, `minAgeDays`, `minTrades`, `max`, `timeframe`, `strategy`, `refreshHours`, `exclude` |
+| `adaptive` | `enabled`, cada cuántas horas (`everyHours` 4), ventana (`windowDays` 60), memoria (`halfLifeDays` 30), peso del grupo (`priorTrades` 5), probabilidades mínima (0,55) y para tamaño completo (0,7) |
 | `protections` | `cooldownBars` (20), `stopGuardCount` (3) stops en `stopGuardMinutes` (60) → pausa de `stopGuardPauseMinutes` (240) |
 | `crypto.markets`, `forex.markets` | `{ "symbol": "CHZ/USDT", "timeframe": "3m", "strategy": "capitulacion", "params": { … } }` |
 
@@ -232,6 +249,7 @@ npm test          # compila y ejecuta las pruebas, sin conexión
 | `research.ts` | Huellas de ballenas y estudio de eventos |
 | `learn.ts` | Aprendizaje con validación en datos no vistos |
 | `engine.ts`, `backtest.ts` | Bucle del bot y backtest de cartera, con las mismas reglas |
+| `quant.ts`, `adaptive.ts` | Algoritmos cuantitativos (VPIN, Kyle, Amihud, Hurst, Kelly, Sharpe deflactado) y capa adaptativa |
 | `protections.ts`, `pairs.ts`, `verify.ts` | Protecciones, lista dinámica de pares, detección de sesgo de anticipación |
 | `risk.ts`, `stops.ts` | Tamaño de posición, límites, stops, objetivo y stop dinámico |
 | `brokers/`, `data/` | Simulado, exchanges (ccxt), OANDA; datos de Binance, ccxt, Yahoo y OANDA |

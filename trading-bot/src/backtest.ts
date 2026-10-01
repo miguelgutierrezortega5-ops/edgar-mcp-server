@@ -26,6 +26,8 @@ export interface PortfolioOptions {
   /** Stop trading at this time (bars after it are ignored). */
   tradeUntil?: number;
   protections?: ProtectionParams;
+  /** Multiplier for the size of an entry signalled at bar `i` of `market` (0 skips it); the adaptive layer. */
+  sizeScale?: (market: Market, i: number, time: number) => number;
 }
 
 export interface MarketSummary {
@@ -146,7 +148,9 @@ export function simulate(o: PortfolioOptions): PortfolioResult {
               params: o.risk,
               barValue: averageBarValue(s.candles.slice(Math.max(0, i - 50), i)),
             });
-            const units = paperUnits(s.market, size);
+            const scale = o.sizeScale ? o.sizeScale(s.market, i - 1, bar.time) : 1;
+            const units = paperUnits(s.market, size * scale);
+            if (!(scale > 0)) skipped++;
             if (units > 0) {
               const p = account.open({ market: s.market, side: sig.entry.side, units, price: bar.open, rate, stopDistance: sig.entry.stopDistance, takeProfitDistance: sig.entry.takeProfitDistance, time: bar.time });
               if (sig.entry.maxBars) p.expiresAt = bar.time + sig.entry.maxBars * s.step;

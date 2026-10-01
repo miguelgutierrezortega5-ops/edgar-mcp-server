@@ -10,6 +10,8 @@ import * as fmt from "./fmt.js";
 import { telegramCommands, telegramNotifier } from "./notify.js";
 import { selectPairs } from "./pairs.js";
 import { lookaheadCheck } from "./verify.js";
+import { assess, collectOutcomes, describeArm, loadAdaptive, saveAdaptive, type AdaptiveState } from "./adaptive.js";
+import { hurst, regimeName } from "./quant.js";
 import { buildBrokers, buildSources } from "./setup.js";
 import { paperName, Store } from "./store.js";
 import { applyLearning, describeLearning, learn, loadLearning, saveLearning } from "./learn.js";
@@ -73,16 +75,19 @@ async function scan(config: Config, markets: Market[]): Promise<void> {
           dayAgo ? fmt.pct((last.close / dayAgo.close - 1) * 100) : "—",
           Number.isFinite(f.relVolume[recent]) ? `×${f.relVolume[recent].toFixed(1)}` : "—",
           Number.isFinite(f.buyShare[recent]) ? `${(f.buyShare[recent] * 100).toFixed(0)}%` : "—",
+          Number.isFinite(f.vpinPct[recent]) ? `p${(f.vpinPct[recent] * 100).toFixed(0)}` : "—",
+          regimeName(hurst(closed, 300)),
           prints.slice(0, 2).join(", ") || "—",
           m.paused ? `en pausa: ${m.paused}` : !sig ? `solo ${closed.length} velas` : sig.entry ? `ENTRADA ${fmt.side(sig.entry.side).toUpperCase()}: ${sig.reason}` : sig.reason,
         ];
       } catch (err) {
-        rows[k] = [m.id, "", "", "", "", "", `error: ${(err as Error).message}`];
+        rows[k] = [m.id, "", "", "", "", "", "", "", `error: ${(err as Error).message}`];
       }
     }),
   );
   console.log(`Mercados a ${fmt.time(now)} UTC. Volumen y compras agresivas de la última vela cerrada; huellas de las últimas 20 velas\n`);
-  console.log(fmt.table(["Mercado", "Precio", "24h", "Volumen", "Compras", "Huella de ballenas", "Señal"], rows));
+  console.log(fmt.table(["Mercado", "Precio", "24h", "Volumen", "Compras", "VPIN", "Régimen", "Huella de ballenas", "Señal"], rows));
+  console.log("\nVPIN: toxicidad del flujo (p90 = más tóxico que el 90% del historial reciente). Régimen: exponente de Hurst de las últimas 300 velas.");
 }
 
 /** Configured markets plus the pairs picked automatically from Binance (crypto.autoPairs). */
@@ -181,6 +186,36 @@ async function study(config: Config, markets: Market[], days: number, timeframe?
   console.log("\nUna huella es útil si su media supera el coste, se repite en ambas mitades y en la mayoría de mercados.");
 }
 
+/** Score every recent signal's outcome per strategy and context, and save the size multipliers. */
+async function runAdaptive(config: Config, markets: Market[], notify?: (msg: string) => Promise<void>): Promise<AdaptiveState> {
+  const { sources: src, fx } = buildSources(config, markets);
+  const now = Date.now();
+  const from = now - config.adaptive.windowDays * DAY;
+  const loaded = await Promise.all(
+    markets.map(async (m): Promise<SeriesInput | null> => {
+      try {
+        const since = historyStart(m, minCandles(m) * 3, from);
+        const candles = closedCandles(await src[m.type]!.history(m, since), m.timeframe, now);
+        const reference = (await referenceBars(config, [m], src, () => since, now)).get(m.timeframe);
+        return { market: m, candles, rateAt: await rateFunction(m, config.accountCurrency, fx, candles.at(-1)?.close ?? 1), context: { reference } };
+      } catch (err) {
+        log(`Capa adaptativa ${m.id}: ${(err as Error).message}`);
+        return null;
+      }
+    }),
+  );
+  const previous = loadAdaptive(config.dataDir);
+  const state = assess(collectOutcomes(loaded.filter((x): x is SeriesInput => x !== null), { risk: config.risk, costs: config.paper, from }), now, config.adaptive);
+  saveAdaptive(config.dataDir, state);
+  state.arms.forEach((a) => log(`Evidencia ${describeArm(a)}`));
+  const switched = state.arms.filter((a) => {
+    const before = previous?.arms.find((b) => b.group === a.group && b.context === a.context);
+    return before && before.scale > 0 !== a.scale > 0;
+  });
+  if (switched.length) await notify?.(`📊 Capa adaptativa:\n${switched.map((a) => `${a.scale > 0 ? "▶️ vuelve" : "⏹️ se apaga"} ${a.group} | ${a.context}`).join("\n")}`);
+  return state;
+}
+
 async function runLearning(config: Config, markets: Market[], notify?: (msg: string) => Promise<void>): Promise<void> {
   const { sources: src, fx } = buildSources(config, markets);
   log(`Aprendiendo con ${markets.length} mercados (puede tardar un par de minutos)…`);
@@ -192,6 +227,7 @@ async function runLearning(config: Config, markets: Market[], notify?: (msg: str
   lines.forEach((l) => log(l));
   changes.forEach((l) => log(l));
   await notify?.(`🧠 Aprendizaje:\n${state.groups.map((g) => `${g.key}: ${g.decision} — ${g.note}`).join("\n")}`);
+  if (config.adaptive.enabled) await runAdaptive(config, markets, notify);
 }
 
 async function runBacktest(config: Config, markets: Market[], opts: { days: number; market?: string; listTrades: boolean }): Promise<void> {
@@ -353,6 +389,9 @@ async function status(config: Config, markets: Market[], resume: boolean): Promi
   const learned = loadLearning(config.dataDir);
   console.log(`\nAprendizaje${learned ? ` (${fmt.time(learned.updatedAt)} UTC; historial en ${config.dataDir}/aprendizaje.log)` : ": todavía no se ha ejecutado (npm run aprender)"}`);
   if (learned) describeLearning(learned, ccy).forEach((l) => console.log(`  ${l}`));
+  const adaptive = loadAdaptive(config.dataDir);
+  console.log(`\nCapa adaptativa${adaptive ? ` (${fmt.time(adaptive.updatedAt)} UTC; historial en ${config.dataDir}/adaptativo.log)` : ": sin datos todavía"}`);
+  adaptive?.arms.forEach((a) => console.log(`  ${describeArm(a)}`));
 
   console.log("\nLímites de riesgo");
   for (const [name, r] of Object.entries(state.risk)) {
@@ -398,8 +437,17 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
       }
     }
     if (learning.enabled) await relearn();
+    const age = adaptiveState ? Date.now() - adaptiveState.updatedAt : Infinity;
+    if (config.adaptive.enabled && age >= config.adaptive.everyHours * 3_600_000 && (!state.positions.length || age >= (config.adaptive.everyHours + 4) * 3_600_000)) {
+      try {
+        adaptiveState = await runAdaptive(config, bot.markets, notify);
+      } catch (err) {
+        log(`Capa adaptativa fallida: ${(err as Error).message}`);
+      }
+    }
   };
-  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log) });
+  let adaptiveState = config.adaptive.enabled ? loadAdaptive(config.dataDir) : null;
+  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log), adaptive: () => adaptiveState });
 
   log(`Configuración: ${path}. Revisión cada ${config.pollSeconds} s.`);
   for (const m of markets) {
@@ -408,7 +456,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
     log(`  ${m.id.padEnd(14)} → ${b.name} (${mode}), ${strategyOf(m).name}${m.allowShort ? ", largos y cortos" : ", solo largos"}${m.paused ? " — en pausa" : ""}`);
   }
   if (once) {
-    if (learning.enabled) await relearn();
+    await beforeTick();
     await bot.init();
     await bot.tick();
     return;
