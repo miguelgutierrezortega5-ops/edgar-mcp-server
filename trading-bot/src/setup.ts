@@ -3,6 +3,7 @@ import { ExchangeBroker } from "./brokers/exchange.js";
 import { OandaBroker } from "./brokers/oanda.js";
 import { PaperBroker } from "./brokers/paper.js";
 import { REAL_MONEY_ENV, REAL_MONEY_VALUE, realMoneyBrokers, type Config } from "./config.js";
+import { BinanceSource } from "./data/binance.js";
 import { CcxtSource, createExchange } from "./data/ccxt.js";
 import { OandaClient, OandaSource } from "./data/oanda.js";
 import type { CandleSource } from "./data/source.js";
@@ -34,7 +35,9 @@ export interface Sources {
 export function buildSources(config: Config, markets: Market[]): Sources {
   const fx = new YahooFxSource();
   const sources: Partial<Record<AssetClass, CandleSource>> = {};
-  if (markets.some((m) => m.type === "crypto")) sources.crypto = new CcxtSource(createExchange(config.crypto.exchange));
+  if (markets.some((m) => m.type === "crypto")) {
+    sources.crypto = config.crypto.exchange === "binance" ? new BinanceSource() : new CcxtSource(createExchange(config.crypto.exchange));
+  }
   if (markets.some((m) => m.type === "forex")) sources.forex = config.forex.data === "oanda" ? new OandaSource(oandaClient(config)) : fx;
   return { sources, fx };
 }

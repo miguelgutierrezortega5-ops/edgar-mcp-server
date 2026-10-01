@@ -1,6 +1,8 @@
 import type { Candle, Timeframe } from "./types.js";
 
 export const TIMEFRAME_MS: Record<Timeframe, number> = {
+  "1m": 60_000,
+  "3m": 3 * 60_000,
   "5m": 5 * 60_000,
   "15m": 15 * 60_000,
   "30m": 30 * 60_000,

@@ -3,10 +3,10 @@ import type { Config } from "./config.js";
 import { quoteRate, type CandleSource, type FxRates } from "./data/source.js";
 import * as fmt from "./fmt.js";
 import type { Notifier } from "./notify.js";
-import { canOpen, newRiskState, positionSize, updateRisk } from "./risk.js";
+import { averageBarValue, canOpen, newRiskState, positionSize, updateRisk } from "./risk.js";
 import { checkStops, trailStop, type Bar } from "./stops.js";
 import type { BotState, Store } from "./store.js";
-import { computeIndicators, evaluate, minCandles, type Entry, type Signal } from "./strategy.js";
+import { minCandles, needsReference, referenceMarket, signalAt, type Entry, type Signal } from "./strategy.js";
 import { closedCandles, mergeCandles, TIMEFRAME_MS } from "./timeframes.js";
 import type { AssetClass, Candle, ClosedTrade, Market, Position, PriceMark } from "./types.js";
 
@@ -21,6 +21,8 @@ export interface BotDeps {
   notify: Notifier;
   log: (msg: string) => void;
   now?: () => number;
+  /** Runs before each round (the learner hooks in here). */
+  beforeTick?: () => Promise<void>;
 }
 
 const MAX_RECENT_TRADES = 100;
@@ -32,6 +34,8 @@ export function historyStart(market: Market, bars: number, now: number): number 
 
 export class Bot {
   private readonly candles = new Map<string, Candle[]>();
+  private readonly references = new Map<string, Candle[]>();
+  private lastHeartbeat = 0;
   private readonly marks = new Map<string, PriceMark>();
   private readonly equity = new Map<string, number>();
   private readonly errors = new Map<string, number>();
@@ -89,6 +93,17 @@ export class Bot {
   async tick(): Promise<void> {
     const now = this.now();
     const fresh = new Map<string, Candle[]>();
+    // Reference market (BTC) per timeframe, for strategies that compare against the whole market.
+    const refs = new Map<string, Market>();
+    for (const m of this.d.markets) if (needsReference(m)) refs.set(m.timeframe, referenceMarket(this.d.config.crypto.reference, m));
+    for (const [tf, ref] of refs) {
+      try {
+        this.references.set(tf, closedCandles(await this.refresh(ref), ref.timeframe, now));
+      } catch (err) {
+        this.references.delete(tf);
+        await this.fail(ref.id, err);
+      }
+    }
     for (const m of this.d.markets) {
       try {
         const candles = await this.refresh(m);
@@ -122,6 +137,12 @@ export class Bot {
       }
     }
     this.d.store.save(this.state);
+    if (now - this.lastHeartbeat >= 15 * 60_000) {
+      this.lastHeartbeat = now;
+      const value = [...this.equity].map(([name, v]) => `${name} ${fmt.money(v, this.d.config.accountCurrency)}`).join(", ");
+      const paused = this.d.markets.filter((m) => m.paused).length;
+      this.d.log(`Vigilando ${this.d.markets.length} mercados (${paused} en pausa), ${this.state.positions.length} posiciones abiertas. Valor: ${value || "—"}`);
+    }
   }
 
   private async checkAccount(broker: Broker, markets: Market[], now: number): Promise<void> {
@@ -169,26 +190,30 @@ export class Bot {
         }
       }
     }
+    if (pos?.expiresAt !== undefined && now >= pos.expiresAt) {
+      await this.closePosition(pos, m, "tiempo máximo", mark.price, now);
+      pos = undefined;
+    }
 
     const closed = closedCandles(candles, m.timeframe, now);
     const last = closed.at(-1);
     if (!last || last.time <= (this.state.lastBar[m.id] ?? -Infinity)) return;
     this.state.lastBar[m.id] = last.time;
-    if (closed.length < minCandles(m.strategy)) {
-      this.d.log(`${m.id}: solo ${closed.length} velas cerradas; hacen falta ${minCandles(m.strategy)} para operar`);
+    if (closed.length < minCandles(m)) {
+      this.d.log(`${m.id}: solo ${closed.length} velas cerradas; hacen falta ${minCandles(m)} para operar`);
       return;
     }
 
-    const ind = computeIndicators(closed, m.strategy);
-    const sig = evaluate(ind, closed.length - 1, m.strategy, m.allowShort);
-    this.d.log(this.describe(m, sig, mark, pos));
+    const sig = signalAt(m, closed, needsReference(m) ? { reference: this.references.get(m.timeframe) } : undefined);
+    // Quiet bars of fast markets are not worth a log line each.
+    if (pos || sig.entry || sig.exitLong || sig.exitShort || TIMEFRAME_MS[m.timeframe] >= 15 * 60_000) this.d.log(this.describe(m, sig, mark, pos));
 
     if (pos) {
       if ((pos.side === "long" && sig.exitLong) || (pos.side === "short" && sig.exitShort)) {
         await this.closePosition(pos, m, "cruce contrario de medias", mark.price, now);
         pos = undefined;
       } else if (m.strategy.trailingStopAtr > 0 && last.time >= pos.openedAt) {
-        const stop = trailStop(pos, last, sig.snapshot.atr, m.strategy.trailingStopAtr);
+        const stop = trailStop(pos, last, sig.atr, m.strategy.trailingStopAtr);
         if (stop !== null) {
           await broker.updateStop(pos, stop);
           pos.watchFrom = last.time + TIMEFRAME_MS[m.timeframe];
@@ -196,11 +221,12 @@ export class Bot {
         }
       }
     }
-    if (!pos && sig.entry) await this.tryOpen(m, broker, sig.entry, mark, now);
+    if (!pos && sig.entry) await this.tryOpen(m, broker, sig.entry, mark, now, closed);
   }
 
-  private async tryOpen(m: Market, broker: Broker, entry: Entry, mark: PriceMark, now: number): Promise<void> {
+  private async tryOpen(m: Market, broker: Broker, entry: Entry, mark: PriceMark, now: number, closed: Candle[]): Promise<void> {
     const label = `${m.id}: señal ${fmt.side(entry.side)}`;
+    if (m.paused) return this.d.log(`${label} ignorada: mercado en pausa (${m.paused})`);
     const equity = this.equity.get(broker.name);
     if (equity === undefined) return this.d.log(`${label} ignorada: no se pudo valorar la cuenta ${broker.name}`);
     const risk = (this.state.risk[broker.name] ??= newRiskState(equity, now));
@@ -208,7 +234,15 @@ export class Bot {
     const check = canOpen(risk, this.d.config.risk, equity, open);
     if (!check.ok) return this.d.log(`${label} ignorada: ${check.reason}`);
 
-    const size = positionSize({ equity, price: mark.price, stopDistance: entry.stopDistance, rate: mark.rate, type: m.type, params: this.d.config.risk });
+    const size = positionSize({
+      equity,
+      price: mark.price,
+      stopDistance: entry.stopDistance,
+      rate: mark.rate,
+      type: m.type,
+      params: this.d.config.risk,
+      barValue: averageBarValue(closed),
+    });
     const units = broker.normalizeUnits(m, size, mark.price);
     if (!(units > 0)) return this.d.log(`${label} ignorada: el tamaño (${size.toPrecision(3)}) queda por debajo del mínimo del mercado`);
 
@@ -222,6 +256,7 @@ export class Bot {
       takeProfitDistance: entry.takeProfitDistance,
       time: now,
     });
+    if (entry.maxBars) pos.expiresAt = now + entry.maxBars * TIMEFRAME_MS[m.timeframe];
     this.state.positions.push(pos);
     const ccy = this.d.config.accountCurrency;
     const riskAmount = Math.abs(pos.entryPrice - pos.stop) * pos.units * mark.rate;
@@ -251,18 +286,13 @@ export class Bot {
   }
 
   private describe(m: Market, sig: Signal, mark: PriceMark, pos: Position | undefined): string {
-    const s = sig.snapshot;
-    const parts = [
-      `${m.id} | cierre ${fmt.price(s.close)}`,
-      `tendencia ${s.close > s.trend ? "alcista" : "bajista"}`,
-      `EMA${m.strategy.fastEma} ${s.fast > s.slow ? ">" : "<"} EMA${m.strategy.slowEma}`,
-      `RSI ${s.rsi.toFixed(1)}`,
-    ];
+    const parts = [`${m.id} | cierre ${fmt.price(sig.close)}`];
+    if (sig.info) parts.push(sig.info);
     if (pos) {
       const change = ((mark.price - pos.entryPrice) / pos.entryPrice) * 100 * (pos.side === "long" ? 1 : -1);
       parts.push(`posición ${fmt.side(pos.side)} ${fmt.pct(change)}`);
     }
-    parts.push(sig.reason);
+    parts.push(m.paused ? `${sig.reason} (en pausa)` : sig.reason);
     return parts.join(" | ");
   }
 
@@ -280,6 +310,7 @@ export class Bot {
     while (!signal.aborted) {
       const started = Date.now();
       try {
+        await this.d.beforeTick?.();
         await this.tick();
       } catch (err) {
         this.d.log(`Error: ${(err as Error).message}`);

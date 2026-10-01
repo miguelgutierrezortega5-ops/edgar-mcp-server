@@ -167,7 +167,7 @@ Por defecto escucha solo en `127.0.0.1` y rechaza peticiones con otra cabecera `
 
 ## Bot de trading de cripto y divisas
 
-La carpeta [`trading-bot/`](trading-bot/README.md) contiene un bot independiente que vigila mercados de criptomonedas y divisas, decide con una estrategia de seguimiento de tendencia (cruce de medias con filtros de tendencia y RSI, stops por ATR) y opera con gestión del riesgo. Por defecto opera en simulado; también puede usar un exchange de cripto (vía ccxt) u OANDA, en cuenta de pruebas o real. Incluye backtest, avisos por Telegram y pruebas sin conexión.
+La carpeta [`trading-bot/`](trading-bot/README.md) contiene un bot independiente que vigila cripto y divisas, estudia las huellas de las ballenas (desplomes, bombeos, barridas de stops, absorciones) y opera con gestión del riesgo. Usa una estrategia de capitulación para cripto de bajo volumen en velas de 3 minutos y otra de cruce de medias. Se reajusta solo cada 24 h y valida cada cambio en datos no vistos; si nada gana, pausa el mercado. Por defecto opera en simulado; también puede usar un exchange vía ccxt (Binance…) u OANDA.
 
 ```bash
 cd trading-bot && npm install && npm run scan

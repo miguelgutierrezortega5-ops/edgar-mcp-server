@@ -1,20 +1,20 @@
 # Bot de trading de criptomonedas y divisas
 
-Bot que vigila mercados de cripto y forex, decide entradas y salidas con una estrategia de seguimiento de tendencia y las ejecuta con gestión del riesgo. Funciona **en modo simulado (paper trading) por defecto**, sin claves ni dinero real.
+Bot que vigila mercados de cripto y forex, **estudia las huellas que dejan las ballenas**, opera con gestión del riesgo y **se reajusta solo** con datos recientes, validando cada cambio en datos que no ha visto. Funciona **en modo simulado (paper trading) por defecto**, sin claves ni dinero real.
 
-> ⚠️ **Lee esto antes de usarlo con dinero.** El trading automático puede hacerte perder dinero, y con apalancamiento (forex) más de lo que esperas. Ninguna estrategia gana siempre: la incluida **perdió dinero en el backtest del último año** (ver [Resultados](#resultados-del-backtest)). Es una base sólida para experimentar, no una máquina de hacer dinero ni asesoramiento financiero.
+> ⚠️ **Lee esto antes de usarlo con dinero.** El trading automático puede hacerte perder dinero. Los resultados de abajo son históricos: el bot los vuelve a comprobar cada día, pero nada garantiza que se repitan. No es asesoramiento financiero.
 
 ## Qué hace
 
-- **Vigila** cada mercado configurado (velas de 5 min a 1 día): tendencia, cruce de medias, RSI y volatilidad (ATR).
-- **Decide** con reglas fijas y transparentes ([estrategia](#cómo-decide)).
-- **Limita el riesgo**: arriesga un % fijo del capital por operación, pone stop-loss y objetivo en cada una, y se para solo ante una racha de pérdidas.
-- **Ejecuta** en:
-  - una cuenta **simulada** con comisiones, deslizamiento y spread realistas (por defecto);
-  - un **exchange de cripto** (Binance, Kraken, Coinbase, Bybit, OKX… vía [ccxt](https://github.com/ccxt/ccxt)), en su red de pruebas o con dinero real;
-  - **OANDA** para divisas, en cuenta demo o real.
-- **Prueba** la estrategia con datos históricos (backtest) con las mismas reglas que usa en vivo.
-- **Avisa** por Telegram de cada operación (opcional) y guarda un registro en `data/trades.csv`.
+- **Vigila** cada mercado (velas de 1 minuto a 1 día; 3 minutos para las cripto de bajo volumen) y muestra las **huellas de las ballenas**: desplomes con volumen anómalo, bombeos, barridas de stops, absorciones y flujo de compras/ventas agresivas.
+- **Opera** con dos estrategias:
+  - `capitulacion`, pensada para cripto de bajo volumen;
+  - `cruce_medias`, de seguimiento de tendencia.
+- **Aprende**: cada 24 h prueba cientos de combinaciones de parámetros con el historial reciente y solo adopta una si también gana en el tramo más reciente, que no se usó para elegirla. Si nada gana, **pone el mercado en pausa** (lo vigila pero no opera).
+- **Estudia**: `npm run estudiar` mide qué hizo el precio tras cada huella de ballena, para comprobar si un patrón sigue funcionando.
+- **Limita el riesgo**: arriesga un % fijo por operación, limita el tamaño de cada posición según la liquidez del par, pone stop y objetivo en cada operación y cierra por tiempo. Además deja de operar el resto del día si pierde un 3%, y se detiene por completo si cae un 15% desde su máximo.
+- **Ejecuta** en simulado, en cualquier exchange vía [ccxt](https://github.com/ccxt/ccxt) (Binance, Kraken, Bybit, OKX…) o en OANDA para divisas, en cuenta de pruebas o real.
+- **Avisa** por Telegram (opcional) y guarda cada operación en `data/trades.csv`.
 
 ## Instalación
 
@@ -22,82 +22,94 @@ Necesitas [Node.js 20.12 o superior](https://nodejs.org).
 
 ```bash
 cd trading-bot
-npm install                      # descarga dependencias y compila
+npm install
 cp config.example.json config.json
 cp .env.example .env             # solo si vas a usar claves o Telegram
 ```
 
-## Primeros pasos
+## Uso
 
 ```bash
-npm run scan                     # foto del mercado ahora mismo
-npm run backtest                 # cómo le habría ido el último año
-npm run bot                      # arranca el bot (Ctrl+C para pararlo)
-npm run status                   # saldo, posiciones y últimas operaciones
+npm run scan        # foto del mercado y huellas de ballenas ahora mismo
+npm run estudiar    # qué patrones de ballenas funcionan con datos recientes
+npm run aprender    # reajusta parámetros y decide qué mercados operar (2-4 min)
+npm run backtest    # cómo le habría ido con la configuración actual
+npm run bot         # arranca el bot (vuelve a aprender cada 24 h); Ctrl+C para pararlo
+npm run status      # saldo, posiciones, operaciones, aprendizaje y límites
 ```
 
-`npm run scan` muestra algo así:
-
-```
-Mercado     Precio   24h     Tendencia  Medias         RSI   ATR    Señal
-----------  -------  ------  ---------  -------------  ----  -----  ---------------------------------
-BTC/USD 1h  84128.4  +1.36%  alcista    EMA20 > EMA50  58.5  0.50%  EMA rápida por encima de la lenta
-EUR/USD 1h  1.13186  -0.31%  bajista    EMA20 < EMA50  36.8  0.08%  EMA rápida por debajo de la lenta
-USD/JPY 1h  158.124  +0.82%  alcista    EMA20 > EMA50  76.8  0.14%  EMA rápida por encima de la lenta
-```
-
-Opciones útiles:
-
-| Comando | Qué hace |
+| Opción | Qué hace |
 | --- | --- |
-| `npm run backtest -- --dias 730` | Backtest de 2 años |
-| `npm run backtest -- --mercado BTC/USDT --operaciones` | Un solo mercado, con la lista de operaciones |
-| `npm run bot -- --once` | Una sola revisión y termina (para lanzarlo con cron) |
+| `npm run estudiar -- --dias 90` | Estudio con 90 días de historia |
+| `npm run estudiar -- --temporalidad 1h` | Estudia los mercados de 1 hora (por defecto, la temporalidad más usada) |
+| `npm run backtest -- --dias 150 --mercado CHZ/USDT --operaciones` | Un mercado, con la lista de operaciones |
+| `npm run bot -- --once` | Una sola revisión y termina (para cron) |
 | `npm run status -- --reanudar` | Reactiva el trading tras una parada por pérdidas |
-| `node dist/index.js <comando> --config otra.json` | Usa otro archivo de configuración |
 
-## Cómo decide
+## Lo que el bot ha aprendido de las ballenas
 
-Estrategia de **cruce de medias con filtro de tendencia**, evaluada al cierre de cada vela:
+Estudio con 16 pares de Binance de 1 a 8 millones de USD de volumen diario y velas de 3 minutos durante 150 días. Los patrones se buscaron en el primer 60% del periodo y se validaron en el 40% restante. Rentabilidad media después de la señal:
 
-| | Regla (valores por defecto) |
+| Huella | Qué suele ser | Después | ¿Se repite? |
+| --- | --- | --- | --- |
+| **Desplome en cascada**: −3% en 30 min con volumen ×4 **mientras BTC cae** | Cascada de liquidaciones que arrastra a todo el mercado | **+2,1% una hora después; sube el 89% de las veces** (últimos 60 días). Operaciones simuladas con stop y comisiones: +0,4% y +1,3% por operación en los dos tramos | Sí, en ambos tramos y en 12 de 12 pares |
+| Desplome aislado: igual, pero con BTC tranquilo | Venta real de esa moneda (noticias, desbloqueos, una ballena saliendo) | Operaciones simuladas: −0,4% y −0,2% por operación | Pierde en ambos tramos |
+| Bombeo: +3% en 30 min con volumen ×4 | Pump & dump | −0,4% a −0,7% una hora después | Sí: nunca comprar ahí |
+| Barrida de máximos: supera el máximo reciente y cierra por debajo | Trampa alcista | Negativo | Sí |
+| Ruptura con compras agresivas | Perseguir la subida | ≈ 0% | Las rupturas se deshacen |
+| Barrida de mínimos con volumen | Caza de stops | +0,1% en una hora, +0,25% en cuatro | Positivo pero por debajo de las comisiones |
+
+Conclusiones que usa la estrategia `capitulacion`:
+
+1. Comprar el desplome **solo si BTC también cae** (`marketDropPct`).
+2. **Stop amplio**, 1,5 ATR por debajo del mínimo del desplome: los stops ajustados son justo los que barren las ballenas. Con 0,5 ATR la mayoría de configuraciones pierde.
+3. **Objetivo**: recuperar todo lo que cayó. **Salida por tiempo** a las 40 velas (2 horas).
+4. **Tamaño limitado por la liquidez**: como máximo el 20% de lo que se negocia en una vela típica (`maxBarVolumePct`), para no mover el precio en pares pequeños.
+
+Los desplomes llegan en racimos: un mismo día de caída activa una docena de monedas a la vez. Por eso el aprendizaje mide los resultados **por día**, no por operación. Si no, un solo día parecería mucha evidencia.
+
+## Resultados del backtest
+
+Configuración de ejemplo, del 4-5-2026 al 1-10-2026, 10.000 USD por mercado, comisiones y deslizamiento incluidos:
+
+| Estrategia y mercados | Resultado |
 | --- | --- |
-| **Compra** | La media exponencial rápida (EMA 20) cruza por encima de la lenta (EMA 50), el precio está por encima de la EMA 200 (tendencia alcista) y el RSI(14) no está sobrecomprado (< 70) |
-| **Venta en corto** | Lo contrario: cruce bajista, precio bajo la EMA 200 y RSI > 30. Solo en divisas (en cripto spot no se puede vender en corto) |
-| **Stop-loss** | 2 × ATR(14) desde el precio de entrada |
-| **Objetivo** | 4 × ATR(14) (relación beneficio/riesgo 2:1). `takeProfitAtr: 0` lo desactiva |
-| **Stop dinámico** | Opcional (`trailingStopAtr`): sigue al precio a N × ATR del máximo alcanzado |
-| **Salida** | Al tocar el stop o el objetivo, o con el cruce de medias contrario |
+| `capitulacion`, 12 pares de bajo volumen en 3m | **Gana en los 12**: factor de beneficio de 1,47 a 7,62 y caída máxima ≤ 2,6%. Pocas operaciones (8-35 por par) y posiciones pequeñas por el límite de liquidez: +0,5% a +4,4% por par |
+| `cruce_medias`, BTC y ETH en 1h | Pierde (−1,1% y −3,8%). El aprendizaje los pone en pausa |
+| `cruce_medias`, divisas en 1h | Pierde con los parámetros por defecto. El aprendizaje adoptó otros (EMA 20/100, stop 3 ATR) que ganaron en validación |
 
-Todos los parámetros se cambian en `config.json`, en general (`strategy`) o por mercado.
+**Ojo:** el filtro de BTC lo descubrí mirando estos mismos 150 días, así que este backtest **no es una prueba limpia**. La prueba de verdad son los datos futuros: por eso el bot revalida cada 24 h y pausa lo que deja de funcionar.
 
-## Gestión del riesgo
+## Cómo aprende
 
-| Parámetro | Por defecto | Qué hace |
-| --- | --- | --- |
-| `riskPerTradePct` | 1 | % del capital que se pierde si salta el stop. El tamaño de cada posición se calcula a partir de esto |
-| `maxNotionalPct.crypto` | 25 | Valor máximo de una posición de cripto, en % del capital |
-| `maxNotionalPct.forex` | 500 | Ídem en divisas (500% = apalancamiento 5:1, por debajo del 30:1 que permite la normativa europea) |
-| `maxOpenPositions` | 4 | Posiciones abiertas a la vez |
-| `dailyLossLimitPct` | 3 | Si se pierde este % en el día (UTC), no abre más operaciones hasta el día siguiente |
-| `maxDrawdownPct` | 15 | Si el capital cae este % desde su máximo, **cierra todo y se detiene** hasta `npm run status -- --reanudar` |
+1. Agrupa los mercados que comparten estrategia y temporalidad. En bajo volumen, una moneda sola da muy pocas operaciones para fiarse.
+2. Toma el historial reciente (`learning.bars`, unos 150 días en 3m) y lo divide: el 70% más antiguo para buscar y el 30% más reciente para validar.
+3. Prueba cada combinación de parámetros de la estrategia y elige la de mejor resultado diario, ajustado por su variabilidad.
+4. Comprueba esa combinación en el 30% reciente:
+   - **si gana**, la adopta;
+   - si no gana pero los parámetros actuales sí, **los mantiene**;
+   - si nada gana, **pausa** el grupo;
+   - si hay pocos datos, no cambia nada.
+5. Guarda el resultado en `data/aprendizaje.json` y añade una línea al diario `data/aprendizaje.log`, para ver cómo evoluciona.
+
+Mientras haya posiciones abiertas, el bot pospone el aprendizaje (hasta un día) para no dejarlas sin vigilar durante esos minutos.
 
 ## Modos de operación
 
 | Modo | Configuración | Dinero |
 | --- | --- | --- |
-| **Simulado** (por defecto) | `crypto.broker: "paper"`, `forex.broker: "paper"` | Ficticio: `paper.startingBalance` |
-| **Exchange en red de pruebas** | `crypto.broker: "exchange"`, `sandbox: true` + claves de la testnet | Ficticio (p. ej. [testnet de Binance](https://testnet.binance.vision)) |
-| **OANDA demo** | `forex.broker: "oanda"`, `oandaEnv: "practice"` + claves de una cuenta demo | Ficticio |
+| **Simulado** (por defecto) | `crypto.broker: "paper"`, `forex.broker: "paper"` | Ficticio |
+| **Red de pruebas** | `crypto.broker: "exchange"`, `sandbox: true` + claves de la [testnet de Binance](https://testnet.binance.vision) | Ficticio |
+| **OANDA demo** | `forex.broker: "oanda"`, `oandaEnv: "practice"` | Ficticio |
 | **Real** | `sandbox: false` u `oandaEnv: "live"` **y** `CONFIRMAR_DINERO_REAL=si` en `.env` | **Real** |
 
-El bot se niega a arrancar con dinero real si falta `CONFIRMAR_DINERO_REAL=si`. Recomendación: backtest → simulado durante semanas → cuenta de pruebas → real con poco dinero.
-
-Al pasar a un exchange real:
+En un exchange real:
 
 - crea la clave de API **solo con permiso de trading, nunca de retirada**;
-- usa una subcuenta dedicada: el bot calcula el capital con todo el saldo de la cuenta;
-- **los stops de cripto los vigila el bot**: si el bot está parado, no te protegen. En OANDA el stop y el objetivo se envían con la orden y viven en el servidor del broker.
+- usa una subcuenta dedicada;
+- recuerda que **los stops de cripto los vigila el bot**: debe estar encendido.
+
+Los precios de cripto salen de `data-api.binance.vision`, el servicio público de datos de Binance, accesible desde cualquier país. Incluye el volumen de compras agresivas. Las órdenes van a `api.binance.com`, disponible en México.
 
 ## Configuración
 
@@ -105,62 +117,47 @@ Al pasar a un exchange real:
 
 | Clave | Qué es |
 | --- | --- |
-| `accountCurrency` | Moneda de la cuenta (`USD`). Las stablecoins (USDT, USDC…) cuentan como USD |
-| `pollSeconds` | Cada cuántos segundos revisa los mercados (60) |
-| `historyBars` | Velas que mantiene en memoria para los indicadores (720) |
-| `paper` | Capital inicial simulado, comisión y deslizamiento de cripto (%), spread de divisas (pips) |
-| `risk`, `strategy` | Ver tablas anteriores |
-| `crypto.exchange` | Exchange de ccxt para precios y órdenes: `binance`, `kraken`, `coinbase`, `bybit`, `okx`… |
-| `crypto.markets` | Pares como `BTC/USDT`, con `timeframe` (`5m`, `15m`, `30m`, `1h`, `4h`, `1d`) y, opcionalmente, su propia `strategy` |
-| `forex.data` | Precios de `yahoo` (gratis, sin clave, solo uso personal) u `oanda` |
-| `forex.markets` | Pares como `EUR/USD`, `USD/JPY`, `EUR/GBP` |
-| `telegram.enabled` | Envía avisos si hay `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env` |
+| `pollSeconds` | Cada cuántos segundos revisa los mercados (20 con velas de 3m) |
+| `paper` | Capital simulado, comisión y deslizamiento de cripto (%), spread de divisas (pips) |
+| `risk.riskPerTradePct` | % del capital que se pierde si salta el stop (1) |
+| `risk.maxNotionalPct` | Tamaño máximo de una posición en % del capital: cripto 25, divisas 500 (apalancamiento 5:1) |
+| `risk.maxBarVolumePct` | Tamaño máximo como % de lo negociado en una vela típica (20). Protege en pares de poco volumen |
+| `risk.maxOpenPositions`, `dailyLossLimitPct`, `maxDrawdownPct` | 4 posiciones; parar el día al −3%; detenerse al −15% desde el máximo |
+| `strategies` | Parámetros por defecto de cada estrategia (ver abajo) |
+| `learning` | `enabled`, cada cuántas horas (`everyHours`), historial (`bars`, `maxDays`), % de validación (`testPct`), mínimos de operaciones y factor de beneficio |
+| `crypto.exchange` | `binance` (por defecto), `kraken`, `bybit`, `okx`… |
+| `crypto.reference` | Mercado que indica si cae todo el mercado (`BTC/USDT`) |
+| `crypto.markets`, `forex.markets` | `{ "symbol": "CHZ/USDT", "timeframe": "3m", "strategy": "capitulacion", "params": { … } }` |
 
-Ejemplo de ajuste por mercado:
+Parámetros de `capitulacion`:
 
-```json
-{ "symbol": "ETH/USDT", "timeframe": "4h", "strategy": { "stopAtr": 3, "trailingStopAtr": 3, "takeProfitAtr": 0 } }
-```
+| Parámetro | Por defecto | Qué es |
+| --- | --- | --- |
+| `lookback`, `dropPct` | 10, 3 | Caída mínima (%) en esas velas |
+| `relVolume`, `volumeAvg` | 4, 50 | Volumen mínimo frente a la media de esas velas |
+| `marketDropPct` | 0,5 | Caída mínima de BTC en las mismas velas (0 = sin filtro) |
+| `stopAtr`, `atrPeriod` | 1,5, 14 | Stop: este múltiplo del ATR bajo el mínimo del desplome |
+| `retrace` | 1 | Objetivo: fracción de la caída a recuperar (0 = sin objetivo) |
+| `maxBars` | 40 | Cierre por tiempo, en velas |
 
-Binance no da servicio desde EE. UU. (devuelve el error 451): allí usa `kraken` o `coinbase`. Kraken solo sirve sus últimas 720 velas, así que sus backtests son cortos. Coinbase no tiene velas de 4h.
+Parámetros de `cruce_medias`: `fastEma` 20, `slowEma` 50, `trendEma` 200, `rsiPeriod` 14, `rsiOverbought` 70, `rsiOversold` 30, `atrPeriod` 14, `stopAtr` 2, `takeProfitAtr` 4, `trailingStopAtr` 0.
 
-El estado (saldo simulado, posiciones, límites) se guarda en `data/state.json`. Para empezar de cero, borra la carpeta `data/`.
+El estado se guarda en `data/`. Para empezar de cero, borra esa carpeta.
 
 ## Tenerlo en marcha 24/7
 
-El bot tiene que estar encendido para operar. Algunas opciones en un servidor o una Raspberry Pi:
-
 ```bash
-# con pm2
 npm install -g pm2
 pm2 start dist/index.js --name trading-bot -- run
 pm2 logs trading-bot
-
-# o con cron, una revisión cada 5 minutos
-*/5 * * * * cd /ruta/a/trading-bot && node dist/index.js run --once >> data/bot.log 2>&1
 ```
-
-## Resultados del backtest
-
-Configuración por defecto, velas de 1 hora, del 1-10-2025 al 1-10-2026, 10.000 USD por mercado. Cripto con datos de Coinbase y divisas con Yahoo Finance:
-
-| Mercado | Operaciones | Aciertos | Resultado | Comprar y mantener | Máx. caída |
-| --- | --- | --- | --- | --- | --- |
-| BTC/USD | 32 | 41% | -1,4% | -26,3% | -3,0% |
-| ETH/USD | 40 | 38% | -3,6% | -34,2% | -3,9% |
-| EUR/USD | 52 | 25% | -9,7% (se detuvo por drawdown) | -3,9% | -15,1% |
-| GBP/USD | 67 | 34% | -0,7% | -1,7% | -10,5% |
-| USD/JPY | 60 | 30% | -4,1% | +7,6% | -9,6% |
-
-Lectura honesta: en cripto la gestión del riesgo funcionó (perdió poco mientras el mercado caía un 26-34%), pero **la estrategia no ganó dinero en ningún mercado** ese año. En velas de 4 horas desde noviembre de 2024, EUR/USD ganó un 4,6% y GBP/USD y USD/JPY perdieron. Antes de arriesgar dinero, prueba otros parámetros y periodos, desconfía de los que solo funcionan en un tramo concreto de la historia y compáralos siempre con comprar y mantener.
 
 ## Limitaciones
 
-- El backtest simula comisiones, deslizamiento y spread, pero no huecos de liquidez, caídas del exchange ni el coste de mantener posiciones de divisas de un día a otro (swap).
-- En modo simulado, los stops se comprueban con las velas y el último precio en cada revisión: un pico muy breve entre dos revisiones dentro de la vela de entrada puede pasar desapercibido.
-- Si una vela toca el stop y el objetivo a la vez, se asume el stop (lo prudente).
-- Yahoo Finance es un servicio no oficial: puede fallar o cambiar sin aviso, y sus condiciones no permiten el uso comercial.
-- Las conversiones de divisas cruzadas (p. ej. EUR/GBP a USD) usan el tipo de cambio de Yahoo.
+- El backtest simula comisiones, deslizamiento y spread, pero no la profundidad real del libro de órdenes ni caídas del exchange.
+- En pares de poco volumen, el límite de liquidez deja posiciones pequeñas. Esta estrategia no escala a cuentas grandes.
+- Los datos de futuros (liquidaciones, financiación y posición de los grandes traders) darían más pistas sobre las cascadas, pero todavía no se usan.
+- Yahoo Finance (divisas) es un servicio no oficial y solo para uso personal.
 
 ## Desarrollo
 
@@ -168,15 +165,13 @@ Lectura honesta: en cripto la gestión del riesgo funcionó (perdió poco mientr
 npm test          # compila y ejecuta las pruebas, sin conexión
 ```
 
-Código en `src/`:
-
 | Archivo | Qué contiene |
 | --- | --- |
-| `strategy.ts`, `indicators.ts` | Estrategia e indicadores (EMA, RSI y ATR de Wilder) |
-| `risk.ts`, `stops.ts` | Tamaño de posición, límites, stop-loss, objetivo y stop dinámico |
-| `engine.ts` | Bucle del bot: datos → señales → órdenes |
-| `backtest.ts` | Backtest con las mismas reglas |
-| `brokers/` | Simulado (`paper.ts`), exchanges de cripto (`exchange.ts`) y OANDA (`oanda.ts`) |
-| `data/` | Velas de ccxt, Yahoo Finance y OANDA |
+| `strategies/` | Estrategias (`capitulation.ts`, `ema.ts`) y su interfaz |
+| `research.ts` | Huellas de ballenas y estudio de eventos |
+| `learn.ts` | Aprendizaje con validación en datos no vistos |
+| `engine.ts`, `backtest.ts` | Bucle del bot y backtest, con las mismas reglas |
+| `risk.ts`, `stops.ts` | Tamaño de posición, límites, stops, objetivo y stop dinámico |
+| `brokers/`, `data/` | Simulado, exchanges (ccxt), OANDA; datos de Binance, ccxt, Yahoo y OANDA |
 
-Para probar otra estrategia, modifica `evaluate` en `strategy.ts`: recibe los indicadores de una vela y devuelve si hay que entrar, salir o esperar, y la usan tanto el bot como el backtest.
+Para añadir una estrategia, crea un archivo en `strategies/` con la interfaz de `strategies/types.ts`: parámetros, rejilla de aprendizaje, `prepare` y `evaluate`. Después regístrala en `strategy.ts`.

@@ -1,6 +1,7 @@
 export type AssetClass = "crypto" | "forex";
 export type Side = "long" | "short";
-export type Timeframe = "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
+export type Timeframe = "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
+export type StrategyName = "cruce_medias" | "capitulacion";
 
 /** OHLCV bar; `time` is the bar's start in epoch milliseconds. */
 export interface Candle {
@@ -10,23 +11,12 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  /** Base volume bought by aggressive (taker) buyers; only some sources (Binance) report it. */
+  takerBuy?: number;
 }
 
-export interface StrategyParams {
-  fastEma: number;
-  slowEma: number;
-  trendEma: number;
-  rsiPeriod: number;
-  rsiOverbought: number;
-  rsiOversold: number;
-  atrPeriod: number;
-  /** Stop-loss distance in ATRs. */
-  stopAtr: number;
-  /** Take-profit distance in ATRs; 0 disables it. */
-  takeProfitAtr: number;
-  /** Trailing-stop distance in ATRs from the best price since entry; 0 disables it. */
-  trailingStopAtr: number;
-}
+/** Numeric parameters of a strategy; each strategy documents its own keys. */
+export type StrategyParams = Record<string, number>;
 
 export interface Market {
   /** Unique key, e.g. "BTC/USDT 1h". */
@@ -37,7 +27,10 @@ export interface Market {
   quote: string;
   timeframe: Timeframe;
   allowShort: boolean;
+  strategyName: StrategyName;
   strategy: StrategyParams;
+  /** Set by the learner when the strategy shows no edge on unseen data: monitored but not traded. */
+  paused?: string;
 }
 
 export interface Position {
@@ -60,6 +53,8 @@ export interface Position {
   brokerRef?: string;
   /** Bars starting at or after this time are checked against the current stop (set when the stop moves). */
   watchFrom?: number;
+  /** Close the position at this time if neither stop nor target was hit (time stop). */
+  expiresAt?: number;
 }
 
 export interface ClosedTrade extends Position {

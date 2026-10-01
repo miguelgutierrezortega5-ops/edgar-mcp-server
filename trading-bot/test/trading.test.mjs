@@ -8,7 +8,7 @@ import { PaperAccount, PaperBroker } from "../dist/brokers/paper.js";
 import { parseConfig } from "../dist/config.js";
 import { Bot } from "../dist/engine.js";
 import { Store } from "../dist/store.js";
-import { computeIndicators, evaluate } from "../dist/strategy.js";
+import { signals } from "../dist/strategy.js";
 import { bars, COSTS, HOUR, market, RISK, T0, vShape } from "./helpers.mjs";
 
 const close = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, `${a} ≉ ${b}`);
@@ -110,8 +110,8 @@ function setup(overrides = {}) {
 /** Bars up to the first bullish signal, plus a forming bar. */
 function upToSignal(m) {
   const all = bars(vShape());
-  const ind = computeIndicators(all, m.strategy);
-  const e = all.findIndex((_, i) => evaluate(ind, i, m.strategy, false).entry);
+  const sigs = signals(m, all);
+  const e = sigs.findIndex((s) => s?.entry);
   assert.ok(e > 0);
   const last = all[e];
   return { candles: [...all.slice(0, e + 1), { ...last, time: last.time + HOUR, open: last.close, high: last.close, low: last.close }], signalBar: last };

@@ -162,7 +162,7 @@ test("exchange broker: buys within the free balance and sells what it bought", a
 });
 
 test("config: defaults, validation and the real-money gate", () => {
-  const { config, markets } = parseConfig({ crypto: { markets: [{ symbol: "BTC/USDT" }] }, forex: { broker: "oanda", markets: [{ symbol: "EUR/USD", timeframe: "4h", strategy: { stopAtr: 3 } }] } });
+  const { config, markets } = parseConfig({ crypto: { markets: [{ symbol: "BTC/USDT" }] }, forex: { broker: "oanda", markets: [{ symbol: "EUR/USD", timeframe: "4h", params: { stopAtr: 3 } }] } });
   assert.equal(config.risk.riskPerTradePct, 1);
   assert.equal(config.forex.data, "oanda");
   assert.equal(markets[0].allowShort, false);
@@ -172,7 +172,7 @@ test("config: defaults, validation and the real-money gate", () => {
   assert.deepEqual(realMoneyBrokers(config, markets), []);
 
   assert.throws(() => parseConfig({ forex: { markets: [{ symbol: "EURUSD" }] } }), /forex\.markets\.0\.symbol/);
-  assert.throws(() => parseConfig({ crypto: { markets: [{ symbol: "BTC/USDT", strategy: { fastEma: 60 } }] } }), /fastEma/);
+  assert.throws(() => parseConfig({ crypto: { markets: [{ symbol: "BTC/USDT", params: { fastEma: 60 } }] } }), /fastEma/);
   assert.throws(() => parseConfig({ crypto: { broker: "exchange", markets: [{ symbol: "BTC/USDT", allowShort: true }] } }), /cortos/);
   assert.throws(() => parseConfig({}), /No hay mercados/);
   assert.throws(() => parseConfig({ crypto: { markets: [{ symbol: "BTC/USDT" }] }, risk: { riskPerTradePct: 50 } }), /riskPerTradePct/);

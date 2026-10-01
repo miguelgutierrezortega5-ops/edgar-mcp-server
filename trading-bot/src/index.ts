@@ -4,15 +4,17 @@ import { parseArgs } from "node:util";
 import { unrealized } from "./brokers/broker.js";
 import { backtest, type BacktestResult } from "./backtest.js";
 import { loadConfig, type Config } from "./config.js";
-import { fiatOf, quoteRate } from "./data/source.js";
+import { quoteRate, rateFunction } from "./data/source.js";
 import { Bot, historyStart } from "./engine.js";
 import * as fmt from "./fmt.js";
 import { telegramNotifier } from "./notify.js";
 import { buildBrokers, buildSources } from "./setup.js";
 import { Store } from "./store.js";
-import { computeIndicators, evaluate, minCandles } from "./strategy.js";
+import { applyLearning, describeLearning, learn, loadLearning, saveLearning } from "./learn.js";
+import { eventStudy, features, footprintsAt, HORIZONS } from "./research.js";
+import { minCandles, needsReference, referenceMarket, signalAt, strategyOf } from "./strategy.js";
 import { closedCandles, TIMEFRAME_MS } from "./timeframes.js";
-import type { Market, PriceMark } from "./types.js";
+import type { Candle, Market, PriceMark } from "./types.js";
 
 const HELP = `Bot de trading de criptomonedas y divisas
 
@@ -24,7 +26,13 @@ Comandos:
       --dias N             Días de historia (por defecto 365)
       --mercado SIMBOLO    Solo ese mercado, p. ej. BTC/USDT
       --operaciones        Lista cada operación
-  run (o bot)              Arranca el bot: vigila los mercados y opera según la configuración
+  estudiar                 Estudia las huellas de las ballenas (desplomes, bombeos, barridas de stops,
+                           absorciones…) y qué hizo el precio después, con datos recientes
+      --dias N             Días de historia (por defecto 30)
+      --temporalidad 3m    Solo los mercados de esa temporalidad (por defecto la más usada)
+  aprender                 Reajusta los parámetros con datos recientes y los valida en datos no vistos;
+                           pausa los mercados donde ninguna configuración gana
+  run (o bot)              Arranca el bot: vigila los mercados, opera y vuelve a aprender cada 24 h
       --once               Hace una sola pasada y termina (útil con cron)
   status                   Saldo, posiciones abiertas, últimas operaciones y límites de riesgo
       --reanudar           Reactiva el trading tras una parada por drawdown
@@ -39,36 +47,113 @@ const DAY = 86_400_000;
 
 async function scan(config: Config, markets: Market[]): Promise<void> {
   const { sources: src } = buildSources(config, markets);
+  applyLearning(markets, loadLearning(config.dataDir));
   const now = Date.now();
   const rows: string[][] = [];
-  for (const m of markets) {
-    try {
-      const candles = await src[m.type]!.history(m, historyStart(m, config.historyBars, now));
-      const closed = closedCandles(candles, m.timeframe, now);
-      const last = candles.at(-1)!;
-      const dayAgo = [...candles].reverse().find((c) => c.time <= last.time - DAY);
-      if (closed.length < minCandles(m.strategy)) {
-        rows.push([m.id, fmt.price(last.close), "", "", "", "", "", `solo ${closed.length} velas cerradas`]);
-        continue;
+  const refs = await referenceBars(config, markets, src, (m) => historyStart(m, config.historyBars, now), now);
+  await Promise.all(
+    markets.map(async (m, k) => {
+      try {
+        const candles = await src[m.type]!.history(m, historyStart(m, config.historyBars, now));
+        const closed = closedCandles(candles, m.timeframe, now);
+        const last = candles.at(-1)!;
+        const dayAgo = [...candles].reverse().find((c) => c.time <= last.time - DAY);
+        const ref = refs.get(m.timeframe);
+        const f = features(closed, m.type === "crypto" ? ref : undefined);
+        const recent = closed.length - 1;
+        const prints: string[] = [];
+        for (let i = recent; i > recent - 20 && i > 0; i--) for (const name of footprintsAt(f, i)) if (!prints.some((p) => p.startsWith(name))) prints.push(`${name} (hace ${recent - i + 1})`);
+        const sig = closed.length >= minCandles(m) ? signalAt(m, closed, { reference: ref }) : null;
+        rows[k] = [
+          m.id,
+          fmt.price(last.close),
+          dayAgo ? fmt.pct((last.close / dayAgo.close - 1) * 100) : "—",
+          Number.isFinite(f.relVolume[recent]) ? `×${f.relVolume[recent].toFixed(1)}` : "—",
+          Number.isFinite(f.buyShare[recent]) ? `${(f.buyShare[recent] * 100).toFixed(0)}%` : "—",
+          prints.slice(0, 2).join(", ") || "—",
+          m.paused ? `en pausa: ${m.paused}` : !sig ? `solo ${closed.length} velas` : sig.entry ? `ENTRADA ${fmt.side(sig.entry.side).toUpperCase()}: ${sig.reason}` : sig.reason,
+        ];
+      } catch (err) {
+        rows[k] = [m.id, "", "", "", "", "", `error: ${(err as Error).message}`];
       }
-      const sig = evaluate(computeIndicators(closed, m.strategy), closed.length - 1, m.strategy, m.allowShort);
-      const s = sig.snapshot;
-      rows.push([
-        m.id,
-        fmt.price(last.close),
-        dayAgo ? fmt.pct((last.close / dayAgo.close - 1) * 100) : "—",
-        s.close > s.trend ? "alcista" : "bajista",
-        `EMA${m.strategy.fastEma} ${s.fast > s.slow ? ">" : "<"} EMA${m.strategy.slowEma}`,
-        s.rsi.toFixed(1),
-        `${((s.atr / s.close) * 100).toFixed(2)}%`,
-        sig.entry ? `ENTRADA ${fmt.side(sig.entry.side).toUpperCase()}` : sig.reason,
-      ]);
+    }),
+  );
+  console.log(`Mercados a ${fmt.time(now)} UTC. Volumen y compras agresivas de la última vela cerrada; huellas de las últimas 20 velas\n`);
+  console.log(fmt.table(["Mercado", "Precio", "24h", "Volumen", "Compras", "Huella de ballenas", "Señal"], rows));
+}
+
+/** Closed bars of the reference market (BTC) for each timeframe that needs it. */
+async function referenceBars(
+  config: Config,
+  markets: Market[],
+  src: Partial<Record<"crypto" | "forex", { history(m: Market, since: number): Promise<Candle[]> }>>,
+  since: (m: Market) => number,
+  now: number,
+  always = false,
+): Promise<Map<string, Candle[]>> {
+  const out = new Map<string, Candle[]>();
+  for (const m of markets) {
+    if ((!always && !needsReference(m)) || m.type !== "crypto" || out.has(m.timeframe) || !src.crypto) continue;
+    const ref = referenceMarket(config.crypto.reference, m);
+    try {
+      out.set(m.timeframe, closedCandles(await src.crypto.history(ref, since(m)), m.timeframe, now));
     } catch (err) {
-      rows.push([m.id, "", "", "", "", "", "", `error: ${(err as Error).message}`]);
+      log(`${ref.id}: ${(err as Error).message}`);
     }
   }
-  console.log(`Mercados a ${fmt.time(now)} UTC (indicadores sobre la última vela cerrada)\n`);
-  console.log(fmt.table(["Mercado", "Precio", "24h", "Tendencia", "Medias", "RSI", "ATR", "Señal"], rows));
+  return out;
+}
+
+async function study(config: Config, markets: Market[], days: number, timeframe?: string): Promise<void> {
+  // Horizons are counted in bars, so only pool markets of the same timeframe (the most used one).
+  const crypto = markets.filter((m) => m.type === "crypto");
+  const pool = crypto.length ? crypto : markets;
+  const counts = new Map<string, number>();
+  pool.forEach((m) => counts.set(m.timeframe, (counts.get(m.timeframe) ?? 0) + 1));
+  const tf = timeframe ?? [...counts].sort((a, b) => b[1] - a[1])[0][0];
+  const list = pool.filter((m) => m.timeframe === tf);
+  if (!list.length) throw new Error(`No hay mercados de ${tf}`);
+  const { sources: src } = buildSources(config, list);
+  const now = Date.now();
+  const series = (
+    await Promise.all(
+      list.map(async (m) => {
+        try {
+          return { id: m.id, candles: closedCandles(await src[m.type]!.history(m, now - days * DAY), m.timeframe, now) };
+        } catch (err) {
+          log(`${m.id}: ${(err as Error).message}`);
+          return null;
+        }
+      }),
+    )
+  ).filter((x): x is { id: string; candles: Candle[] } => x !== null);
+  const ref = list[0].type === "crypto" ? (await referenceBars(config, list, src, () => now - days * DAY, now, true)).get(tf) : undefined;
+  const { stats, baseline } = eventStudy(series, ref);
+  const cost = (config.paper.cryptoFeePct + config.paper.cryptoSlippagePct) * 2;
+  const r = (v: number) => (Number.isFinite(v) ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}` : "—");
+  console.log(`Estudio de huellas: ${series.length} mercados de ${tf}, ${days} días. Rentabilidad media (%) desde la apertura siguiente hasta ${HORIZONS.join(", ")} velas después.`);
+  console.log(`Referencia (todas las velas): ${baseline.map(r).join(" / ")}. Coste de ida y vuelta simulado: ${cost.toFixed(2)}%\n`);
+  console.log(
+    fmt.table(
+      ["Huella", "Casos", `+${HORIZONS.join(" / +")} velas`, "Sube a +20", "1ª mitad", "2ª mitad", "Mercados +"],
+      stats.map((s) => [s.pattern.name, String(s.events), s.mean.map(r).join(" / "), `${s.hitRate.toFixed(0)}%`, r(s.firstHalf), r(s.secondHalf), `${s.marketsPositive}/${s.markets}`]),
+    ),
+  );
+  console.log("\n" + stats.map((s) => `${s.pattern.name}: ${s.pattern.meaning}`).join("\n"));
+  console.log("\nUna huella es útil si su media supera el coste, se repite en ambas mitades y en la mayoría de mercados.");
+}
+
+async function runLearning(config: Config, markets: Market[], notify?: (msg: string) => Promise<void>): Promise<void> {
+  const { sources: src, fx } = buildSources(config, markets);
+  log(`Aprendiendo con ${markets.length} mercados (puede tardar un par de minutos)…`);
+  applyLearning(markets, loadLearning(config.dataDir)); // the current parameters are the last learned ones
+  const state = await learn({ markets, config, fx, history: (m, since) => src[m.type]!.history(m, since), now: Date.now(), log });
+  saveLearning(config.dataDir, state);
+  const changes = applyLearning(markets, state);
+  const lines = describeLearning(state, config.accountCurrency);
+  lines.forEach((l) => log(l));
+  changes.forEach((l) => log(l));
+  await notify?.(`🧠 Aprendizaje:\n${state.groups.map((g) => `${g.key}: ${g.decision} — ${g.note}`).join("\n")}`);
 }
 
 async function runBacktest(config: Config, markets: Market[], opts: { days: number; market?: string; listTrades: boolean }): Promise<void> {
@@ -79,26 +164,25 @@ async function runBacktest(config: Config, markets: Market[], opts: { days: numb
   const tradeFrom = now - opts.days * DAY;
   const results: BacktestResult[] = [];
   const ccy = config.accountCurrency;
-  for (const m of selected) {
-    try {
-      const warmup = minCandles(m.strategy) * 3;
-      const since = historyStart(m, warmup, tradeFrom);
-      const candles = closedCandles(await src[m.type]!.history(m, since), m.timeframe, now);
-      if (candles.length && candles[0].time > tradeFrom) {
-        log(`${m.id}: la fuente solo da historia desde ${fmt.time(candles[0].time)}; el backtest es más corto de lo pedido`);
+  const settled = await Promise.all(
+    selected.map(async (m): Promise<BacktestResult | null> => {
+      try {
+        const warmup = minCandles(m) * 3;
+        const since = historyStart(m, warmup, tradeFrom);
+        const candles = closedCandles(await src[m.type]!.history(m, since), m.timeframe, now);
+        if (candles.length && candles[0].time > tradeFrom) {
+          log(`${m.id}: la fuente solo da historia desde ${fmt.time(candles[0].time)}; el backtest es más corto de lo pedido`);
+        }
+        const rateAt = await rateFunction(m, ccy, fx, candles.at(-1)?.close ?? 1);
+        const reference = (await referenceBars(config, [m], src, () => since, now)).get(m.timeframe);
+        return backtest({ market: m, candles, risk: config.risk, costs: config.paper, startingBalance: config.paper.startingBalance, rateAt, tradeFrom, context: { reference } });
+      } catch (err) {
+        log(`${m.id}: ${(err as Error).message}`);
+        return null;
       }
-      let rateAt: (price: number) => number;
-      if (fiatOf(m.quote) === ccy) rateAt = () => 1;
-      else if (fiatOf(m.base) === ccy) rateAt = (p) => 1 / p;
-      else {
-        const r = await quoteRate(m, candles.at(-1)?.close ?? 1, ccy, fx);
-        rateAt = () => r;
-      }
-      results.push(backtest({ market: m, candles, risk: config.risk, costs: config.paper, startingBalance: config.paper.startingBalance, rateAt, tradeFrom }));
-    } catch (err) {
-      log(`${m.id}: ${(err as Error).message}`);
-    }
-  }
+    }),
+  );
+  results.push(...settled.filter((r): r is BacktestResult => r !== null));
   if (!results.length) return;
 
   const pf = (v: number) => (Number.isNaN(v) ? "—" : v === Infinity ? "∞" : v.toFixed(2));
@@ -220,6 +304,10 @@ async function status(config: Config, markets: Market[], resume: boolean): Promi
     );
   }
 
+  const learned = loadLearning(config.dataDir);
+  console.log(`\nAprendizaje${learned ? ` (${fmt.time(learned.updatedAt)} UTC; historial en ${config.dataDir}/aprendizaje.log)` : ": todavía no se ha ejecutado (npm run aprender)"}`);
+  if (learned) describeLearning(learned, ccy).forEach((l) => console.log(`  ${l}`));
+
   console.log("\nLímites de riesgo");
   for (const [name, r] of Object.entries(state.risk)) {
     console.log(`  ${name}: máximo ${fmt.money(r.peakEquity, ccy)}, inicio del día ${fmt.money(r.dayStartEquity, ccy)} (${r.day})${r.halted ? ` — DETENIDO: ${r.halted}` : ""}`);
@@ -232,15 +320,30 @@ async function run(config: Config, markets: Market[], path: string, once: boolea
   const { sources: src, fx } = buildSources(config, markets);
   const brokers = buildBrokers(config, markets, state);
   const notify = telegramNotifier(config.telegram.enabled, log);
-  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log });
+  const learning = config.learning;
+  const relearn = async () => {
+    const last = loadLearning(config.dataDir);
+    const age = last ? Date.now() - last.updatedAt : Infinity;
+    if (age < learning.everyHours * 3_600_000) return;
+    // Learning takes minutes and pauses the loop: wait until no position needs watching (up to a day late).
+    if (state.positions.length && age < (learning.everyHours + 24) * 3_600_000) return;
+    try {
+      await runLearning(config, markets, notify);
+    } catch (err) {
+      log(`Aprendizaje fallido: ${(err as Error).message}`);
+    }
+  };
+  applyLearning(markets, loadLearning(config.dataDir)).forEach((l) => log(l));
+  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick: learning.enabled ? relearn : undefined });
 
   log(`Configuración: ${path}. Revisión cada ${config.pollSeconds} s.`);
   for (const m of markets) {
     const b = brokers[m.type]!;
     const mode = b.realMoney ? "DINERO REAL" : b.name === "paper" ? "simulado" : "cuenta de pruebas";
-    log(`  ${m.id.padEnd(14)} → ${b.name} (${mode})${m.allowShort ? ", largos y cortos" : ", solo largos"}`);
+    log(`  ${m.id.padEnd(14)} → ${b.name} (${mode}), ${strategyOf(m).name}${m.allowShort ? ", largos y cortos" : ", solo largos"}${m.paused ? " — en pausa" : ""}`);
   }
   if (once) {
+    if (learning.enabled) await relearn();
     await bot.init();
     await bot.tick();
     return;
@@ -264,6 +367,7 @@ async function main(): Promise<void> {
       once: { type: "boolean", default: false },
       dias: { type: "string" },
       mercado: { type: "string" },
+      temporalidad: { type: "string" },
       operaciones: { type: "boolean", default: false },
       reanudar: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -285,6 +389,13 @@ async function main(): Promise<void> {
       if (!(days > 0)) throw new Error("--dias debe ser un número positivo");
       return runBacktest(config, markets, { days, market: values.mercado, listTrades: values.operaciones });
     }
+    case "estudiar": {
+      const days = Number(values.dias ?? 30);
+      if (!(days > 0)) throw new Error("--dias debe ser un número positivo");
+      return study(config, markets, days, values.temporalidad);
+    }
+    case "aprender":
+      return runLearning(config, markets);
     case "status":
       return status(config, markets, values.reanudar);
     case "run":

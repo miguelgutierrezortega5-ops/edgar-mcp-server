@@ -10,6 +10,8 @@ export interface RiskParams {
   dailyLossLimitPct: number;
   /** Close everything and halt after falling this far below peak equity. */
   maxDrawdownPct: number;
+  /** Largest position as a % of the average traded value of one bar; 0 disables the cap. */
+  maxBarVolumePct: number;
 }
 
 export interface RiskState {
@@ -56,12 +58,29 @@ export function canOpen(state: RiskState, params: RiskParams, equity: number, op
 
 /**
  * Units to trade so that hitting the stop loses `riskPerTradePct` of equity, capped by the
- * maximum position value. `rate` converts the market's quote currency into the account currency.
+ * maximum position value and, in thin markets, by the traded value of a typical bar.
+ * `rate` converts the market's quote currency into the account currency.
  */
-export function positionSize(args: { equity: number; price: number; stopDistance: number; rate: number; type: AssetClass; params: RiskParams }): number {
-  const { equity, price, stopDistance, rate, type, params } = args;
+export function positionSize(args: {
+  equity: number;
+  price: number;
+  stopDistance: number;
+  rate: number;
+  type: AssetClass;
+  params: RiskParams;
+  /** Average traded value of one bar, in quote currency (0 or undefined when unknown). */
+  barValue?: number;
+}): number {
+  const { equity, price, stopDistance, rate, type, params, barValue } = args;
   if (!(equity > 0 && price > 0 && stopDistance > 0 && rate > 0)) return 0;
   const byRisk = (equity * params.riskPerTradePct) / 100 / (stopDistance * rate);
   const byNotional = (equity * params.maxNotionalPct[type]) / 100 / (price * rate);
-  return Math.min(byRisk, byNotional);
+  const byLiquidity = barValue && barValue > 0 && params.maxBarVolumePct > 0 ? (barValue * params.maxBarVolumePct) / 100 / price : Infinity;
+  return Math.min(byRisk, byNotional, byLiquidity);
+}
+
+/** Average traded value (volume × close) of the last `n` bars; 0 when the source reports no volume. */
+export function averageBarValue(candles: { volume: number; close: number }[], n = 50): number {
+  const recent = candles.slice(-n);
+  return recent.length ? recent.reduce((s, c) => s + c.volume * c.close, 0) / recent.length : 0;
 }

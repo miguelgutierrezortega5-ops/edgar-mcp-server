@@ -1,26 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
-import { DEFAULT_STRATEGY, minCandles } from "./strategy.js";
+import { STRATEGIES } from "./strategy.js";
 import { TIMEFRAMES } from "./timeframes.js";
-import type { AssetClass, Market, StrategyParams, Timeframe } from "./types.js";
+import type { AssetClass, Market, StrategyName, StrategyParams, Timeframe } from "./types.js";
 
 /** Environment variable and value that unlock orders with real money. */
 export const REAL_MONEY_ENV = "CONFIRMAR_DINERO_REAL";
 export const REAL_MONEY_VALUE = "si";
 
-const strategyShape = {
-  fastEma: z.number().int().min(2).max(500),
-  slowEma: z.number().int().min(3).max(1000),
-  trendEma: z.number().int().min(3).max(1000),
-  rsiPeriod: z.number().int().min(2).max(100),
-  rsiOverbought: z.number().min(50).max(100),
-  rsiOversold: z.number().min(0).max(50),
-  atrPeriod: z.number().int().min(2).max(100),
-  stopAtr: z.number().positive().max(20),
-  takeProfitAtr: z.number().min(0).max(50),
-  trailingStopAtr: z.number().min(0).max(20),
-};
-const strategyOverrides = z.object(strategyShape).partial().strict();
+const STRATEGY_NAMES = Object.keys(STRATEGIES) as [StrategyName, ...StrategyName[]];
+const paramsSchema = z.record(z.number().finite().min(0));
 
 const marketSchema = (pattern: RegExp, example: string) =>
   z
@@ -28,7 +17,8 @@ const marketSchema = (pattern: RegExp, example: string) =>
       symbol: z.string().regex(pattern, `símbolo con formato ${example}`),
       timeframe: z.enum(TIMEFRAMES as [Timeframe, ...Timeframe[]]).default("1h"),
       allowShort: z.boolean().optional(),
-      strategy: strategyOverrides.optional(),
+      strategy: z.enum(STRATEGY_NAMES).default("cruce_medias"),
+      params: paramsSchema.optional(),
     })
     .strict();
 
@@ -57,13 +47,32 @@ const configSchema = z
         maxOpenPositions: z.number().int().min(1).max(50).default(4),
         dailyLossLimitPct: z.number().positive().max(100).default(3),
         maxDrawdownPct: z.number().positive().max(100).default(15),
+        /** Cap each position at this % of the average traded value of one bar (0 = no cap); protects thin markets. */
+        maxBarVolumePct: z.number().min(0).max(1000).default(20),
       })
       .strict()
       .default({}),
-    strategy: strategyOverrides.default({}),
+    /** Overrides of each strategy's default parameters, for all markets that use it. */
+    strategies: z.object(Object.fromEntries(STRATEGY_NAMES.map((n) => [n, paramsSchema.optional()]))).strict().default({}),
+    learning: z
+      .object({
+        enabled: z.boolean().default(true),
+        everyHours: z.number().positive().max(24 * 30).default(24),
+        /** History used per market, in bars, capped at maxDays. */
+        bars: z.number().int().min(1000).max(200_000).default(75_000),
+        maxDays: z.number().int().min(7).max(1500).default(365),
+        /** Most recent share of the history kept out of the search, to validate on unseen data. */
+        testPct: z.number().min(10).max(60).default(30),
+        minTrades: z.number().int().min(5).default(30),
+        minProfitFactor: z.number().min(1).default(1.1),
+      })
+      .strict()
+      .default({}),
     crypto: z
       .object({
         exchange: z.string().default("binance"),
+        /** Market whose moves tell a market-wide cascade from a coin-specific drop. */
+        reference: z.string().regex(/^[A-Z0-9]{2,12}\/[A-Z0-9]{2,12}$/).default("BTC/USDT"),
         broker: z.enum(["paper", "exchange"]).default("paper"),
         sandbox: z.boolean().default(true),
         markets: z.array(marketSchema(/^[A-Z0-9]{2,12}\/[A-Z0-9]{2,12}$/, "BTC/USDT")).default([]),
@@ -101,19 +110,23 @@ export function parseConfig(raw: unknown): { config: Config; markets: Market[] }
   // Prices and orders must come from the same place when trading on OANDA.
   if (config.forex.broker === "oanda") config.forex.data = "oanda";
 
-  const base: StrategyParams = { ...DEFAULT_STRATEGY, ...config.strategy };
   const markets: Market[] = [];
   const add = (type: AssetClass, m: z.infer<ReturnType<typeof marketSchema>>) => {
     const [b, q] = m.symbol.split("/");
-    const strategy = { ...base, ...m.strategy };
+    const impl = STRATEGIES[m.strategy];
     const id = `${m.symbol} ${m.timeframe}`;
-    if (strategy.fastEma >= strategy.slowEma) throw new Error(`${id}: fastEma (${strategy.fastEma}) debe ser menor que slowEma (${strategy.slowEma})`);
-    if (strategy.rsiOversold >= strategy.rsiOverbought) throw new Error(`${id}: rsiOversold debe ser menor que rsiOverbought`);
-    if (minCandles(strategy) + 50 > config.historyBars) throw new Error(`${id}: historyBars (${config.historyBars}) debe ser al menos ${minCandles(strategy) + 50} para calcular los indicadores`);
+    const overrides = { ...config.strategies[m.strategy], ...m.params };
+    const unknown = Object.keys(overrides).filter((k) => !(k in impl.defaults));
+    if (unknown.length) throw new Error(`${id}: parámetros desconocidos para ${m.strategy}: ${unknown.join(", ")} (válidos: ${Object.keys(impl.defaults).join(", ")})`);
+    const strategy: StrategyParams = { ...impl.defaults, ...overrides };
+    const problem = impl.validate(strategy);
+    if (problem) throw new Error(`${id}: ${problem}`);
+    if (impl.minCandles(strategy) + 50 > config.historyBars) throw new Error(`${id}: historyBars (${config.historyBars}) debe ser al menos ${impl.minCandles(strategy) + 50} para calcular los indicadores`);
     if (markets.some((x) => x.id === id)) throw new Error(`Mercado duplicado: ${id}`);
+    if (type === "forex" && m.timeframe === "3m") throw new Error(`${id}: ni Yahoo ni OANDA ofrecen velas de 3m en divisas`);
     const allowShort = m.allowShort ?? type === "forex";
     if (type === "crypto" && allowShort && config.crypto.broker === "exchange") throw new Error(`${id}: el trading spot no permite cortos; quita allowShort`);
-    markets.push({ id, type, symbol: m.symbol, base: b, quote: q, timeframe: m.timeframe, allowShort, strategy });
+    markets.push({ id, type, symbol: m.symbol, base: b, quote: q, timeframe: m.timeframe, allowShort, strategyName: m.strategy, strategy });
   };
   config.crypto.markets.forEach((m) => add("crypto", m));
   config.forex.markets.forEach((m) => add("forex", m));

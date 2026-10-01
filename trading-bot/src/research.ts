@@ -1,0 +1,187 @@
+import { referenceMove, relativeVolume } from "./strategies/capitulation.js";
+import type { Candle } from "./types.js";
+
+// Footprints that large players leave in public market data, and an event study that measures what
+// price did after each one. Used by `estudiar` (research on fresh data) and by `scan` (live monitor).
+
+export interface Features {
+  candles: Candle[];
+  relVolume: number[];
+  /** Share of each bar's volume bought by aggressive buyers (NaN when the source does not report it). */
+  buyShare: number[];
+  /** Where the close sits in the bar's range: 0 = at the low, 1 = at the high. */
+  closePos: number[];
+  /** Lowest low / highest high of the `swing` bars before each bar (where stop orders cluster). */
+  priorLow: number[];
+  priorHigh: number[];
+  /** Net aggressive volume (buys - sells) over the last `swing` bars. */
+  delta: number[];
+  /** % move of the reference market (BTC) over the last 10 bars; NaN without reference data. */
+  marketMove: number[];
+}
+
+export function features(candles: Candle[], reference?: Candle[], swing = 60, volumeAvg = 50): Features {
+  const n = candles.length;
+  const f: Features = {
+    candles,
+    relVolume: relativeVolume(candles, volumeAvg),
+    buyShare: [],
+    closePos: [],
+    priorLow: [],
+    priorHigh: [],
+    delta: [],
+    marketMove: referenceMove(candles, reference, 10),
+  };
+  let delta = 0;
+  for (let i = 0; i < n; i++) {
+    const c = candles[i];
+    f.buyShare.push(c.takerBuy !== undefined && c.volume > 0 ? c.takerBuy / c.volume : NaN);
+    f.closePos.push(c.high > c.low ? (c.close - c.low) / (c.high - c.low) : 0.5);
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let j = Math.max(0, i - swing); j < i; j++) {
+      lo = Math.min(lo, candles[j].low);
+      hi = Math.max(hi, candles[j].high);
+    }
+    f.priorLow.push(i >= swing ? lo : NaN);
+    f.priorHigh.push(i >= swing ? hi : NaN);
+    const d = (b: Candle) => (b.takerBuy === undefined ? 0 : 2 * b.takerBuy - b.volume);
+    delta += d(c) - (i >= swing ? d(candles[i - swing]) : 0);
+    f.delta.push(delta);
+  }
+  return f;
+}
+
+export interface Pattern {
+  name: string;
+  /** Plain-language meaning. */
+  meaning: string;
+  needsTakerVolume?: boolean;
+  needsReference?: boolean;
+  test(f: Features, i: number): boolean;
+}
+
+const move = (f: Features, i: number, bars: number) => (i >= bars ? f.candles[i].close / f.candles[i - bars].close - 1 : 0);
+
+export const PATTERNS: Pattern[] = [
+  { name: "desplome", meaning: "-3% en 10 velas con volumen ×4: barrida de stops o liquidaciones", test: (f, i) => move(f, i, 10) < -0.03 && f.relVolume[i] > 4 },
+  {
+    name: "desplome en cascada",
+    meaning: "desplome mientras BTC cae ≥0,5%: cascada de liquidaciones, suele rebotar",
+    needsReference: true,
+    test: (f, i) => move(f, i, 10) < -0.03 && f.relVolume[i] > 4 && f.marketMove[i] <= -0.5,
+  },
+  {
+    name: "desplome aislado",
+    meaning: "desplome con BTC tranquilo: venta real de esa moneda, suele seguir cayendo",
+    needsReference: true,
+    test: (f, i) => move(f, i, 10) < -0.03 && f.relVolume[i] > 4 && f.marketMove[i] > -0.5,
+  },
+  { name: "bombeo", meaning: "+3% en 10 velas con volumen ×4: bombeo que suele deshacerse", test: (f, i) => move(f, i, 10) > 0.03 && f.relVolume[i] > 4 },
+  {
+    name: "barrida de mínimos",
+    meaning: "perfora el mínimo reciente (stops) y cierra por encima, con volumen",
+    test: (f, i) => f.candles[i].low < f.priorLow[i] && f.candles[i].close > f.priorLow[i] && f.relVolume[i] > 2 && f.closePos[i] > 0.6,
+  },
+  {
+    name: "barrida de máximos",
+    meaning: "supera el máximo reciente y cierra por debajo: trampa alcista",
+    test: (f, i) => f.candles[i].high > f.priorHigh[i] && f.candles[i].close < f.priorHigh[i] && f.relVolume[i] > 2 && f.closePos[i] < 0.4,
+  },
+  {
+    name: "absorción de ventas",
+    meaning: "mucha venta agresiva pero el precio aguanta: alguien grande compra con órdenes límite",
+    needsTakerVolume: true,
+    test: (f, i) => f.relVolume[i] > 3 && f.buyShare[i] < 0.4 && f.closePos[i] > 0.5,
+  },
+  {
+    name: "absorción de compras",
+    meaning: "mucha compra agresiva pero el precio no sube: alguien grande vende",
+    needsTakerVolume: true,
+    test: (f, i) => f.relVolume[i] > 3 && f.buyShare[i] > 0.6 && f.closePos[i] < 0.5,
+  },
+  {
+    name: "divergencia de flujo",
+    meaning: "el precio marca mínimos mientras el flujo neto es comprador: acumulación",
+    needsTakerVolume: true,
+    test: (f, i) => i > 20 && f.candles[i].close < Math.min(...f.candles.slice(Math.max(0, i - 60), i - 20).map((c) => c.low)) && f.delta[i] > 0,
+  },
+  {
+    name: "ruptura con compras",
+    meaning: "rompe el máximo reciente con compras agresivas (perseguir la subida)",
+    needsTakerVolume: true,
+    test: (f, i) => f.candles[i].close > f.priorHigh[i] && f.relVolume[i] > 2 && f.buyShare[i] > 0.6,
+  },
+];
+
+const usable = (p: Pattern, f: Features, i: number) => (!p.needsTakerVolume || Number.isFinite(f.buyShare[i])) && (!p.needsReference || Number.isFinite(f.marketMove[i]));
+
+/** Patterns present at bar `i`. */
+export function footprintsAt(f: Features, i: number): string[] {
+  return PATTERNS.filter((p) => usable(p, f, i) && p.test(f, i)).map((p) => p.name);
+}
+
+export const HORIZONS = [10, 20, 40, 80];
+
+export interface PatternStats {
+  pattern: Pattern;
+  events: number;
+  /** Mean % return from the next bar's open to the close `h` bars later, per horizon. */
+  mean: number[];
+  /** Share of events with a positive return at the second horizon. */
+  hitRate: number;
+  /** Mean at the second horizon in the first and second half of the period (is it stable?). */
+  firstHalf: number;
+  secondHalf: number;
+  marketsPositive: number;
+  markets: number;
+}
+
+/**
+ * Forward returns after each pattern, pooled over markets. Events of the same pattern closer than
+ * `cooldown` bars in one market count once, so a single episode is not counted many times.
+ */
+export function eventStudy(series: { id: string; candles: Candle[] }[], reference?: Candle[], cooldown = 20): { stats: PatternStats[]; baseline: number[] } {
+  const H = HORIZONS;
+  const base = H.map(() => [0, 0]);
+  const acc = PATTERNS.map(() => ({ sum: H.map(() => 0), hits: 0, n: 0, halves: [[0, 0], [0, 0]], byMarket: new Map<string, number>() }));
+  for (const { id, candles } of series) {
+    const f = features(candles, reference);
+    const last = PATTERNS.map(() => -Infinity);
+    const half = Math.floor(candles.length / 2);
+    for (let i = 60; i < candles.length - H.at(-1)! - 1; i++) {
+      const entry = candles[i + 1].open;
+      const fwd = H.map((h) => (candles[i + h].close / entry - 1) * 100);
+      fwd.forEach((r, k) => {
+        base[k][0] += r;
+        base[k][1]++;
+      });
+      PATTERNS.forEach((p, k) => {
+        if (i - last[k] < cooldown || !usable(p, f, i) || !p.test(f, i)) return;
+        last[k] = i;
+        const a = acc[k];
+        a.n++;
+        fwd.forEach((r, j) => (a.sum[j] += r));
+        if (fwd[1] > 0) a.hits++;
+        const hh = a.halves[i < half ? 0 : 1];
+        hh[0] += fwd[1];
+        hh[1]++;
+        a.byMarket.set(id, (a.byMarket.get(id) ?? 0) + fwd[1]);
+      });
+    }
+  }
+  const stats = PATTERNS.map((pattern, k) => {
+    const a = acc[k];
+    return {
+      pattern,
+      events: a.n,
+      mean: a.sum.map((s) => (a.n ? s / a.n : NaN)),
+      hitRate: a.n ? (a.hits / a.n) * 100 : NaN,
+      firstHalf: a.halves[0][1] ? a.halves[0][0] / a.halves[0][1] : NaN,
+      secondHalf: a.halves[1][1] ? a.halves[1][0] / a.halves[1][1] : NaN,
+      marketsPositive: [...a.byMarket.values()].filter((v) => v > 0).length,
+      markets: a.byMarket.size,
+    };
+  }).filter((s) => s.events > 0);
+  return { stats, baseline: base.map(([s, n]) => (n ? s / n : NaN)) };
+}

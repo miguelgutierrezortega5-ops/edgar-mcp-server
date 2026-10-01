@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { atr, ema, rsi } from "../dist/indicators.js";
 import { canOpen, newRiskState, positionSize, updateRisk } from "../dist/risk.js";
 import { checkStops, trailStop } from "../dist/stops.js";
-import { computeIndicators, evaluate, minCandles } from "../dist/strategy.js";
+import { computeIndicators, emaCross, evaluateEma as evaluate } from "../dist/strategies/ema.js";
+const minCandles = (p) => emaCross.minCandles(p);
 import { aggregate, closedCandles, mergeCandles } from "../dist/timeframes.js";
 import { bars, FAST, HOUR, RISK, T0, vShape } from "./helpers.mjs";
 
@@ -58,11 +59,11 @@ test("aggregate builds UTC-aligned higher timeframes", () => {
   assert.equal(four[1].time, T0 + 4 * HOUR);
 });
 
-const ind = (o) => ({ candles: o.close.map((c) => ({ close: c })), ...o });
+const ind = (o) => ({ candles: o.close.map((c, i) => ({ time: i, close: c })), ...o });
 
 test("evaluate enters long on a bullish cross above the trend", () => {
   const sig = evaluate(ind({ close: [10, 12], fast: [9, 11], slow: [10, 10], trend: [8, 8], rsi: [50, 55], atr: [1, 1] }), 1, FAST, false);
-  assert.deepEqual(sig.entry, { side: "long", stopDistance: 2, takeProfitDistance: 4 });
+  assert.deepEqual(sig.entry, { side: "long", stopDistance: 2, takeProfitDistance: 4, maxBars: null });
   assert.equal(sig.exitShort, true);
   assert.equal(sig.exitLong, false);
 });
@@ -125,6 +126,7 @@ test("risk limits: open positions, daily loss, drawdown breaker", () => {
 });
 
 const pos = (side, stop, takeProfit) => ({ side, stop, takeProfit, entryPrice: 100, extreme: 100 });
+
 
 test("checkStops: levels, gaps, and stop first when a bar hits both", () => {
   assert.equal(checkStops(pos("long", 95, 110), { open: 100, high: 105, low: 96 }), null);
