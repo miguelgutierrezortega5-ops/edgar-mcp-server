@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from "node:path";
 import { backtest, type SeriesInput } from "./backtest.js";
 import type { PaperCosts } from "./brokers/paper.js";
+import { openInterestChange, type FuturesPoint } from "./data/futures.js";
 import { amihud, decayedEvidence, rollingPercentile, vpin, type Evidence } from "./quant.js";
 import type { RiskParams } from "./risk.js";
 import { TIMEFRAME_MS } from "./timeframes.js";
@@ -9,10 +10,12 @@ import type { Candle, Market } from "./types.js";
 
 // Adaptive layer: no pattern is assumed to keep working. Every signal's outcome (taken or not: in
 // markets the counterfactual is public, so there is no need to explore blindly) is scored as a log
-// return, per strategy group and market context (order-flow toxicity, liquidity). Evidence decays
-// with a half-life, thin contexts borrow strength from their group (empirical Bayes), and each
-// context gets a size multiplier: 0 when the recent evidence does not support a positive edge,
-// up to 1 when it clearly does, capped by a fraction of the Kelly bet (log-growth optimal).
+// return, per strategy group and per value of each context dimension (order-flow toxicity,
+// liquidity, futures positioning). Evidence decays with a half-life, thin contexts borrow strength
+// from their group (empirical Bayes), and each one gets a size multiplier: 0 when the recent evidence
+// does not support a positive edge, up to 1 when it clearly does, and only while the Kelly bet
+// (log-growth optimal) is positive. A signal takes the most cautious multiplier of its dimensions.
+// Dimensions are judged one at a time because their combinations leave too few cases each.
 
 export interface AdaptiveConfig {
   enabled: boolean;
@@ -25,6 +28,8 @@ export interface AdaptiveConfig {
   minProbability: number;
   /** From this probability on, full size. */
   fullProbability: number;
+  /** Size by context (toxicity, liquidity, futures) instead of the whole group; off by default (see README). */
+  useContexts: boolean;
 }
 
 export interface Arm {
@@ -54,16 +59,24 @@ export const groupOf = (m: Pick<Market, "strategyName" | "timeframe" | "type">) 
  * Market context of every bar: order-flow toxicity (VPIN) and liquidity (Amihud), each as high or
  * normal against the market's own recent history. Without taker-volume data only liquidity is used.
  */
-export function contexts(candles: Candle[]): string[] {
+export function contexts(candles: Candle[], futures?: FuturesPoint[], barMs = 0): string[] {
   const volumes = candles.map((c) => c.volume).sort((a, b) => a - b);
   const bucket = (volumes[Math.floor(volumes.length / 2)] ?? 0) * 10;
   const tox = rollingPercentile(vpin(candles, bucket, 50), 300);
   const illiq = rollingPercentile(amihud(candles, 60), 300);
-  return candles.map((_, i) => `${tox[i] > 0.8 ? "flujo tóxico" : Number.isFinite(tox[i]) ? "flujo normal" : "flujo ?"}, ${illiq[i] > 0.8 ? "iliquidez alta" : "liquidez normal"}`);
+  const oi = futuresState(candles, futures, barMs);
+  return candles.map((_, i) => `${tox[i] > 0.8 ? "flujo tóxico" : Number.isFinite(tox[i]) ? "flujo normal" : "flujo ?"}, ${illiq[i] > 0.8 ? "iliquidez alta" : "liquidez normal"}, ${oi[i]}`);
+}
+
+/** Futures positioning in words: leverage entering, leaving (liquidations, closes) or stable. */
+export function futuresState(candles: Candle[], futures: FuturesPoint[] | undefined, barMs: number): string[] {
+  return openInterestChange(candles, futures, barMs).map((x) =>
+    !Number.isFinite(x) ? "futuros ?" : x >= 3 ? "apalancamiento entrando" : x <= -1 ? "liquidaciones o cierres" : "interés abierto estable",
+  );
 }
 
 /** Outcomes of every signal of each market traded alone (no position limit), with its context at the signal. */
-export function collectOutcomes(series: SeriesInput[], o: { risk: RiskParams; costs: PaperCosts; from: number; until?: number }): Outcome[] {
+export function collectOutcomes(series: (SeriesInput & { futures?: FuturesPoint[] })[], o: { risk: RiskParams; costs: PaperCosts; from: number; until?: number }): Outcome[] {
   const out: Outcome[] = [];
   for (const s of series) {
     let r;
@@ -72,8 +85,8 @@ export function collectOutcomes(series: SeriesInput[], o: { risk: RiskParams; co
     } catch {
       continue;
     }
-    const ctx = contexts(s.candles);
     const step = TIMEFRAME_MS[s.market.timeframe];
+    const ctx = contexts(s.candles, s.futures, step);
     const index = new Map(s.candles.map((c, i) => [c.time, i]));
     for (const t of r.trades) {
       const i = index.get(t.openedAt - step); // the signal bar, just before the entry bar
@@ -100,19 +113,31 @@ export function assess(outcomes: Outcome[], now: number, c: AdaptiveConfig): Ada
     const inGroup = known.filter((o) => o.group === group);
     const g = decayedEvidence(inGroup, now, halfLife);
     arms.push({ group, context: "*", evidence: g, scale: scaleOf(g, c) });
-    for (const context of new Set(inGroup.map((o) => o.context))) {
-      const e = decayedEvidence(inGroup.filter((o) => o.context === context), now, halfLife, { mean: g.mean, n: c.priorTrades });
-      arms.push({ group, context, evidence: e, scale: scaleOf(e, c) });
+    for (const value of new Set(inGroup.flatMap((o) => dimensions(o.context)))) {
+      const e = decayedEvidence(inGroup.filter((o) => dimensions(o.context).includes(value)), now, halfLife, { mean: g.mean, n: c.priorTrades });
+      arms.push({ group, context: value, evidence: e, scale: scaleOf(e, c) });
     }
   }
   return { updatedAt: now, arms };
 }
 
-/** Size multiplier for a signal (1 when there is no evidence yet: the static rules apply). */
-export function scaleFor(state: AdaptiveState | null, m: Pick<Market, "strategyName" | "timeframe" | "type">, context: string): { scale: number; arm?: Arm } {
+/** Values of a context string, one per dimension; unknown values ("flujo ?") carry no evidence. */
+const dimensions = (context: string) => context.split(", ").filter((v) => v && !v.endsWith("?"));
+
+/**
+ * Size multiplier for a signal: the most cautious of its context values (or of the group when none
+ * has evidence yet). 1 when there is no evidence at all: the static rules apply.
+ */
+export function scaleFor(state: AdaptiveState | null, m: Pick<Market, "strategyName" | "timeframe" | "type">, context: string, useContexts = true): { scale: number; arm?: Arm } {
   const group = groupOf(m);
-  const arm = state?.arms.find((a) => a.group === group && a.context === context) ?? state?.arms.find((a) => a.group === group && a.context === "*");
-  return arm ? { scale: arm.scale, arm } : { scale: 1 };
+  const arms = state?.arms.filter((a) => a.group === group) ?? [];
+  const matching = dimensions(context)
+    .map((v) => arms.find((a) => a.context === v))
+    .filter((a): a is Arm => a !== undefined);
+  const pool = useContexts && matching.length ? matching : arms.filter((a) => a.context === "*");
+  if (!pool.length) return { scale: 1 };
+  const arm = pool.reduce((lo, a) => (a.scale < lo.scale ? a : lo));
+  return { scale: arm.scale, arm };
 }
 
 export function describeArm(a: Arm): string {

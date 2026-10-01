@@ -4,6 +4,7 @@ import { quoteRate, type CandleSource, type FxRates } from "./data/source.js";
 import * as fmt from "./fmt.js";
 import type { Command, Notifier } from "./notify.js";
 import { contexts, describeArm, scaleFor, type AdaptiveState } from "./adaptive.js";
+import type { FuturesPoint } from "./data/futures.js";
 import { blocked, onClose } from "./protections.js";
 import { averageBarValue, canOpen, newRiskState, positionSize, updateRisk } from "./risk.js";
 import { checkStops, trailStop, type Bar } from "./stops.js";
@@ -29,6 +30,8 @@ export interface BotDeps {
   commands?: () => Promise<Command[]>;
   /** Latest adaptive evidence; null or absent = static rules only. */
   adaptive?: () => AdaptiveState | null;
+  /** Binance futures positioning of a market since a time (absent when not available). */
+  futures?: (m: Market, since: number) => Promise<FuturesPoint[]>;
 }
 
 export const COMMAND_HELP = "/estado — saldo, posiciones y pausas\n/pausa — no abrir operaciones nuevas\n/reanudar — quitar pausas y paradas por pérdidas\n/cerrar SIMBOLO|todo — cerrar a mercado\n/ayuda";
@@ -319,7 +322,9 @@ export class Bot {
     const guard = blocked(this.state.protections, m.id, now);
     if (guard) return this.d.log(`${label} ignorada: ${guard}`);
 
-    const { scale, arm } = scaleFor(this.d.adaptive?.() ?? null, m, contexts(closed).at(-1) ?? "?");
+    const useContexts = this.d.config.adaptive.useContexts;
+    const futures = useContexts && m.type === "crypto" ? await this.d.futures?.(m, now - 3_600_000).catch(() => undefined) : undefined;
+    const { scale, arm } = scaleFor(this.d.adaptive?.() ?? null, m, contexts(closed, futures, TIMEFRAME_MS[m.timeframe]).at(-1) ?? "?", useContexts);
     if (!(scale > 0)) return this.d.log(`${label} ignorada: la evidencia reciente no respalda este contexto (${arm ? describeArm(arm) : "?"})`);
     const size = scale * positionSize({
       equity,

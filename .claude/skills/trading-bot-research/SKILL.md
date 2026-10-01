@@ -16,7 +16,7 @@ The bot lives in `trading-bot/` (TypeScript, `npm test` offline). Read `trading-
 5. **Count independent episodes, not trades.** Crypto events cluster (one crash day fires a dozen coins). Group by day.
 6. **Never tune on the data you report.** The learner (`src/learn.ts`) does walk-forward; say plainly when a result is in-sample.
 
-Data: `data-api.binance.vision/api/v3/klines` (public, global, includes taker-buy volume) via `src/data/binance.ts`. Binance futures endpoints (`fapi.binance.com`) are geo-blocked from US cloud containers but work from Mexico.
+Data: `data-api.binance.vision/api/v3/klines` (public, global, includes taker-buy volume) via `src/data/binance.ts`. Futures positioning via `src/data/futures.ts`: `data.binance.vision` daily `metrics` zips (5-min open interest, top-trader and global long/short ratios, taker ratio; complete days up to yesterday, reachable from US containers) and monthly `fundingRate`; `fapi.binance.com` fills the current day but is geo-blocked from US containers (works from Mexico). Liquidation snapshots are no longer in the archive.
 
 Token-efficient workflow: put research scripts in the scratchpad, cache klines to disk, print one compact table per run, and reuse `npm run estudiar` / `npm run aprender` instead of ad-hoc dumps.
 
@@ -34,9 +34,13 @@ Token-efficient workflow: put research scripts in the scratchpad, cache klines t
 - Deflated Sharpe of the learner's best combination: 0.42 (capitulation, 216 trials) and 0.08 (forex EMA, 108 trials): grid winners were mostly luck.
 - The user insists that nothing in this market is a law: present every finding as "measured in period X", keep re-measuring, and prefer mechanisms that adapt over hard-coded filters.
 
+- Futures (150 days, 15 pairs): open interest +3% in 30 min was followed by -0.2% to -0.6% over 4 h in both halves (baseline -0.09%/+0.12%), confirmed again on the last 60 days. Other futures readings track the baseline. Capitulation split by open-interest change flips between halves: not a filter.
+- Adaptive sizing by context (toxicity, liquidity, futures), even judged one dimension at a time, did worse than the group-only evidence (PF 1.67 vs 1.82; none 1.85): `useContexts` is off by default.
+
 ## Ideas not yet tested
 
-- Futures data from Mexico: liquidations, funding, open interest, top-trader long/short ratio, to confirm cascades.
+- Live liquidation stream (`!forceOrder@arr` websocket, from Mexico) to time cascades; the archive no longer has liquidations.
+- Fading leverage spikes (open interest +3% in 30 min) on futures with shorts; spot cannot short.
 - Order-book imbalance and spoofing (`/api/v3/depth`), live only (no history).
 - Volume/dollar bars and CUSUM event sampling, fractional differentiation, triple-barrier labels and meta-labeling (López de Prado). The adaptive layer is a simple form of meta-labeling.
 - Public quant repos could not be added to the session (the add_repo request was denied by the permission system); ask the user to allow it before trying again.

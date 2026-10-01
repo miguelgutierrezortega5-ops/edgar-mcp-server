@@ -73,6 +73,7 @@ const configSchema = z
         priorTrades: z.number().min(0).default(5),
         minProbability: z.number().min(0.5).max(0.99).default(0.55),
         fullProbability: z.number().min(0.5).max(0.999).default(0.7),
+        useContexts: z.boolean().default(false),
       })
       .strict()
       .default({}),
@@ -95,6 +96,8 @@ const configSchema = z
     crypto: z
       .object({
         exchange: z.string().default("binance"),
+        /** Binance futures positioning (open interest, long/short ratios, funding) for the monitor, studies and evidence. */
+        futures: z.boolean().default(true),
         /** Market whose moves tell a market-wide cascade from a coin-specific drop. */
         reference: z.string().regex(/^[A-Z0-9]{2,12}\/[A-Z0-9]{2,12}$/).default("BTC/USDT"),
         broker: z.enum(["paper", "exchange"]).default("paper"),

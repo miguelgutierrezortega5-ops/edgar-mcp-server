@@ -12,6 +12,8 @@ import { selectPairs } from "./pairs.js";
 import { lookaheadCheck } from "./verify.js";
 import { assess, collectOutcomes, describeArm, loadAdaptive, saveAdaptive, type AdaptiveState } from "./adaptive.js";
 import { hurst, regimeName } from "./quant.js";
+import { FuturesSource, openInterestChange, type FuturesPoint } from "./data/futures.js";
+import { join } from "node:path";
 import { buildBrokers, buildSources } from "./setup.js";
 import { paperName, Store } from "./store.js";
 import { applyLearning, describeLearning, learn, loadLearning, saveLearning } from "./learn.js";
@@ -56,6 +58,7 @@ async function scan(config: Config, markets: Market[]): Promise<void> {
   const now = Date.now();
   const rows: string[][] = [];
   const refs = await referenceBars(config, markets, src, (m) => historyStart(m, config.historyBars, now), now);
+  const fs = futuresSource(config);
   await Promise.all(
     markets.map(async (m, k) => {
       try {
@@ -77,17 +80,45 @@ async function scan(config: Config, markets: Market[]): Promise<void> {
           Number.isFinite(f.buyShare[recent]) ? `${(f.buyShare[recent] * 100).toFixed(0)}%` : "—",
           Number.isFinite(f.vpinPct[recent]) ? `p${(f.vpinPct[recent] * 100).toFixed(0)}` : "—",
           regimeName(hurst(closed, 300)),
+          fs && m.type === "crypto" ? await futuresSummary(fs, m, now).catch((err) => `error: ${(err as Error).message}`) : "—",
           prints.slice(0, 2).join(", ") || "—",
           m.paused ? `en pausa: ${m.paused}` : !sig ? `solo ${closed.length} velas` : sig.entry ? `ENTRADA ${fmt.side(sig.entry.side).toUpperCase()}: ${sig.reason}` : sig.reason,
         ];
       } catch (err) {
-        rows[k] = [m.id, "", "", "", "", "", "", "", `error: ${(err as Error).message}`];
+        rows[k] = [m.id, "", "", "", "", "", "", "", "", `error: ${(err as Error).message}`];
       }
     }),
   );
   console.log(`Mercados a ${fmt.time(now)} UTC. Volumen y compras agresivas de la última vela cerrada; huellas de las últimas 20 velas\n`);
-  console.log(fmt.table(["Mercado", "Precio", "24h", "Volumen", "Compras", "VPIN", "Régimen", "Huella de ballenas", "Señal"], rows));
+  console.log(fmt.table(["Mercado", "Precio", "24h", "Volumen", "Compras", "VPIN", "Régimen", "Futuros", "Huella de ballenas", "Señal"], rows));
   console.log("\nVPIN: toxicidad del flujo (p90 = más tóxico que el 90% del historial reciente). Régimen: exponente de Hurst de las últimas 300 velas.");
+  if (fs) console.log("Futuros: cambio del interés abierto en 30 min, largos/cortos de los grandes traders (por posición) y de todas las cuentas, y última financiación.");
+}
+
+/** Binance futures positioning, when enabled and the exchange is Binance (archive cached in data/futuros). */
+function futuresSource(config: Config): FuturesSource | null {
+  return config.crypto.futures && config.crypto.exchange === "binance" ? new FuturesSource(join(config.dataDir, "futuros"), log) : null;
+}
+
+const futuresSymbol = (m: Market) => `${m.base}${m.quote}`;
+
+/** One line about a market's futures positioning: open interest change, whales, crowd, funding. */
+async function futuresSummary(fs: FuturesSource, m: Market, now: number): Promise<string> {
+  const [points, funding] = await Promise.all([fs.metrics(futuresSymbol(m), now - 2 * DAY, now), fs.funding(futuresSymbol(m), now - 2 * DAY, now)]);
+  const last = points.at(-1);
+  if (!last) return "sin contrato";
+  const oi = openInterestChange([{ time: last.time }], points, 0)[0];
+  const age = now - last.time;
+  const f = funding.at(-1);
+  return [
+    Number.isFinite(oi) ? `OI ${oi >= 0 ? "+" : ""}${oi.toFixed(1)}%` : null,
+    `ballenas L/S ${last.topPositionsRatio.toFixed(2)}`,
+    `multitud ${last.crowdRatio.toFixed(2)}`,
+    f ? `fin ${(f.rate * 100).toFixed(3)}%` : null,
+    age > 15 * 60_000 ? `(hace ${Math.round(age / 3_600_000)} h)` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** Configured markets plus the pairs picked automatically from Binance (crypto.autoPairs). */
@@ -148,6 +179,7 @@ async function verify(config: Config, markets: Market[]): Promise<void> {
 }
 
 async function study(config: Config, markets: Market[], days: number, timeframe?: string): Promise<void> {
+  const fs = futuresSource(config);
   // Horizons are counted in bars, so only pool markets of the same timeframe (the most used one).
   const crypto = markets.filter((m) => m.type === "crypto");
   const pool = crypto.length ? crypto : markets;
@@ -162,14 +194,15 @@ async function study(config: Config, markets: Market[], days: number, timeframe?
     await Promise.all(
       list.map(async (m) => {
         try {
-          return { id: m.id, candles: closedCandles(await src[m.type]!.history(m, now - days * DAY), m.timeframe, now) };
+          const futures = fs && m.type === "crypto" ? await fs.metrics(futuresSymbol(m), now - days * DAY, now).catch(() => undefined) : undefined;
+          return { id: m.id, candles: closedCandles(await src[m.type]!.history(m, now - days * DAY), m.timeframe, now), futures };
         } catch (err) {
           log(`${m.id}: ${(err as Error).message}`);
           return null;
         }
       }),
     )
-  ).filter((x): x is { id: string; candles: Candle[] } => x !== null);
+  ).filter((x): x is { id: string; candles: Candle[]; futures: FuturesPoint[] | undefined } => x !== null);
   const ref = list[0].type === "crypto" ? (await referenceBars(config, list, src, () => now - days * DAY, now, true)).get(tf) : undefined;
   const { stats, baseline } = eventStudy(series, ref);
   const cost = (config.paper.cryptoFeePct + config.paper.cryptoSlippagePct) * 2;
@@ -191,13 +224,15 @@ async function runAdaptive(config: Config, markets: Market[], notify?: (msg: str
   const { sources: src, fx } = buildSources(config, markets);
   const now = Date.now();
   const from = now - config.adaptive.windowDays * DAY;
+  const fs = futuresSource(config);
   const loaded = await Promise.all(
-    markets.map(async (m): Promise<SeriesInput | null> => {
+    markets.map(async (m): Promise<(SeriesInput & { futures?: FuturesPoint[] }) | null> => {
       try {
         const since = historyStart(m, minCandles(m) * 3, from);
         const candles = closedCandles(await src[m.type]!.history(m, since), m.timeframe, now);
         const reference = (await referenceBars(config, [m], src, () => since, now)).get(m.timeframe);
-        return { market: m, candles, rateAt: await rateFunction(m, config.accountCurrency, fx, candles.at(-1)?.close ?? 1), context: { reference } };
+        const futures = fs && m.type === "crypto" ? await fs.metrics(futuresSymbol(m), since, now).catch(() => undefined) : undefined;
+        return { market: m, candles, rateAt: await rateFunction(m, config.accountCurrency, fx, candles.at(-1)?.close ?? 1), context: { reference }, futures };
       } catch (err) {
         log(`Capa adaptativa ${m.id}: ${(err as Error).message}`);
         return null;
@@ -205,7 +240,7 @@ async function runAdaptive(config: Config, markets: Market[], notify?: (msg: str
     }),
   );
   const previous = loadAdaptive(config.dataDir);
-  const state = assess(collectOutcomes(loaded.filter((x): x is SeriesInput => x !== null), { risk: config.risk, costs: config.paper, from }), now, config.adaptive);
+  const state = assess(collectOutcomes(loaded.filter((x): x is SeriesInput & { futures?: FuturesPoint[] } => x !== null), { risk: config.risk, costs: config.paper, from }), now, config.adaptive);
   saveAdaptive(config.dataDir, state);
   state.arms.forEach((a) => log(`Evidencia ${describeArm(a)}`));
   const switched = state.arms.filter((a) => {
@@ -447,7 +482,9 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
     }
   };
   let adaptiveState = config.adaptive.enabled ? loadAdaptive(config.dataDir) : null;
-  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log), adaptive: () => adaptiveState });
+  const fsLive = futuresSource(config);
+  const futuresFor = fsLive ? (m: Market, since: number) => fsLive.metrics(futuresSymbol(m), since) : undefined;
+  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log), adaptive: () => adaptiveState, futures: futuresFor });
 
   log(`Configuración: ${path}. Revisión cada ${config.pollSeconds} s.`);
   for (const m of markets) {

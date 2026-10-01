@@ -1,3 +1,4 @@
+import { alignToBars, openInterestChange, type FuturesPoint } from "./data/futures.js";
 import { amihud, kyleLambda, rollingPercentile, vpin } from "./quant.js";
 import { referenceMove, relativeVolume } from "./strategies/capitulation.js";
 import type { Candle } from "./types.js";
@@ -25,9 +26,13 @@ export interface Features {
   amihudPct: number[];
   /** Net aggressive volume of the last 20 bars (buys - sells). */
   delta20: number[];
+  /** Futures: % change of open interest in 30 minutes; crowd and top-trader long/short percentiles. */
+  oiChange: number[];
+  crowdPct: number[];
+  topPct: number[];
 }
 
-export function features(candles: Candle[], reference?: Candle[], swing = 60, volumeAvg = 50): Features {
+export function features(candles: Candle[], reference?: Candle[], futures?: FuturesPoint[], swing = 60, volumeAvg = 50): Features {
   const n = candles.length;
   const f: Features = {
     candles,
@@ -42,7 +47,15 @@ export function features(candles: Candle[], reference?: Candle[], swing = 60, vo
     kylePct: rollingPercentile(kyleLambda(candles, 60), 1000),
     amihudPct: rollingPercentile(amihud(candles, 60), 1000),
     delta20: [],
+    oiChange: [],
+    crowdPct: [],
+    topPct: [],
   };
+  const barMs = candles.length > 1 ? candles[1].time - candles[0].time : 60_000;
+  const aligned = alignToBars(candles, futures ?? [], barMs);
+  f.oiChange = openInterestChange(candles, futures, barMs);
+  f.crowdPct = rollingPercentile(aligned.map((p) => p?.crowdRatio ?? NaN), 1000);
+  f.topPct = rollingPercentile(aligned.map((p) => p?.topPositionsRatio ?? NaN), 1000);
   const volumes = candles.map((c) => c.volume).sort((a, b) => a - b);
   f.vpinPct = rollingPercentile(vpin(candles, (volumes[Math.floor(n / 2)] ?? 0) * 10, 50), 1000);
   let d20 = 0;
@@ -77,6 +90,7 @@ export interface Pattern {
   meaning: string;
   needsTakerVolume?: boolean;
   needsReference?: boolean;
+  needsFutures?: boolean;
   test(f: Features, i: number): boolean;
 }
 
@@ -143,6 +157,20 @@ export const PATTERNS: Pattern[] = [
     needsTakerVolume: true,
     test: (f, i) => f.kylePct[i] > 0.9,
   },
+  {
+    name: "apalancamiento entrando",
+    meaning: "el interés abierto en futuros sube ≥3% en 30 min: entra mucho apalancamiento de golpe (medido: suele venir seguido de caídas)",
+    needsFutures: true,
+    test: (f, i) => f.oiChange[i] >= 3,
+  },
+  {
+    name: "liquidaciones o cierres",
+    meaning: "el interés abierto cae ≥2% en 30 min: posiciones cerradas a la fuerza o en pánico",
+    needsFutures: true,
+    test: (f, i) => f.oiChange[i] <= -2,
+  },
+  { name: "multitud muy larga", meaning: "la proporción de cuentas largas está en su 5% más alto: todos del mismo lado", needsFutures: true, test: (f, i) => f.crowdPct[i] > 0.95 },
+  { name: "ballenas muy largas", meaning: "los grandes traders (por tamaño de posición) en su 5% más largo", needsFutures: true, test: (f, i) => f.topPct[i] > 0.95 },
   { name: "iliquidez alta (Amihud)", meaning: "el precio se mueve mucho para lo poco que se negocia", test: (f, i) => f.amihudPct[i] > 0.9 },
   {
     name: "ruptura con compras",
@@ -152,7 +180,8 @@ export const PATTERNS: Pattern[] = [
   },
 ];
 
-const usable = (p: Pattern, f: Features, i: number) => (!p.needsTakerVolume || Number.isFinite(f.buyShare[i])) && (!p.needsReference || Number.isFinite(f.marketMove[i]));
+const usable = (p: Pattern, f: Features, i: number) =>
+  (!p.needsTakerVolume || Number.isFinite(f.buyShare[i])) && (!p.needsReference || Number.isFinite(f.marketMove[i])) && (!p.needsFutures || Number.isFinite(f.oiChange[i]) || Number.isFinite(f.crowdPct[i]));
 
 /** Patterns present at bar `i`. */
 export function footprintsAt(f: Features, i: number): string[] {
@@ -179,12 +208,12 @@ export interface PatternStats {
  * Forward returns after each pattern, pooled over markets. Events of the same pattern closer than
  * `cooldown` bars in one market count once, so a single episode is not counted many times.
  */
-export function eventStudy(series: { id: string; candles: Candle[] }[], reference?: Candle[], cooldown = 20): { stats: PatternStats[]; baseline: number[] } {
+export function eventStudy(series: { id: string; candles: Candle[]; futures?: FuturesPoint[] }[], reference?: Candle[], cooldown = 20): { stats: PatternStats[]; baseline: number[] } {
   const H = HORIZONS;
   const base = H.map(() => [0, 0]);
   const acc = PATTERNS.map(() => ({ sum: H.map(() => 0), hits: 0, n: 0, halves: [[0, 0], [0, 0]], byMarket: new Map<string, number>() }));
-  for (const { id, candles } of series) {
-    const f = features(candles, reference);
+  for (const { id, candles, futures } of series) {
+    const f = features(candles, reference, futures);
     const last = PATTERNS.map(() => -Infinity);
     const half = Math.floor(candles.length / 2);
     for (let i = 60; i < candles.length - H.at(-1)! - 1; i++) {

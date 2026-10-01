@@ -8,6 +8,7 @@
 - **Huellas de ballenas y aprendizaje** en el bot: estrategia de capitulación para cripto de bajo volumen (velas de 3m, filtro de cascada de BTC, límite de tamaño por liquidez, salida por tiempo), estudio de patrones (`npm run estudiar`), reajuste automático con validación en datos no vistos y pausa de los mercados sin ventaja (`npm run aprender`, cada 24 h en el bot), datos de Binance con volumen de compras agresivas, y velas de 1m y 3m.
 - **Lo mejor de otros bots** en el bot de trading: backtest de cartera con una cuenta compartida, protecciones (enfriamiento y pausa tras una racha de stop-loss), lista dinámica de pares de Binance por volumen, spread y antigüedad, detección de sesgo de anticipación (`npm run verificar`), control por Telegram (`/estado`, `/pausa`, `/reanudar`, `/cerrar`), cuentas simuladas separadas para cripto y divisas, y Dockerfile.
 - **Algoritmos cuantitativos y capa adaptativa** en el bot: VPIN, lambda de Kyle, Amihud y exponente de Hurst (medidos en `estudiar` y mostrados en `scan`); evidencia con memoria que se desvanece por estrategia y contexto, que ajusta el tamaño con Kelly y apaga lo que deja de funcionar; ratio de Sharpe deflactado en el aprendizaje para no confundir suerte con ventaja.
+- **Datos de futuros de Binance** en el bot: interés abierto, largos/cortos de grandes traders y de todas las cuentas, flujo agresivo y financiación, del archivo público (historia) y de la API (horas recientes, si el país lo permite). Se muestran en `scan`, se miden en `estudiar` y entran en la evidencia de la capa adaptativa.
 
 ## 1.1.0
 

@@ -13,6 +13,7 @@ Bot que vigila mercados de cripto y forex, **estudia las huellas que dejan las b
 - **Aprende**: cada 24 h prueba cientos de combinaciones de parámetros con el historial reciente y solo adopta una si también gana en el tramo más reciente, que no se usó para elegirla. Si nada gana, **pone el mercado en pausa** (lo vigila pero no opera).
 - **Estudia**: `npm run estudiar` mide qué hizo el precio tras cada huella de ballena, para comprobar si un patrón sigue funcionando.
 - **No da nada por sentado**: una capa adaptativa puntúa cada 4 h el resultado reciente de cada estrategia según el contexto del mercado (toxicidad del flujo, liquidez). Usa memoria que se desvanece. Ajusta el tamaño con Kelly y apaga lo que deja de funcionar; si vuelve a funcionar, lo enciende.
+- **Lee los futuros de Binance**, cada 5 minutos y por contrato: interés abierto, largos/cortos de los grandes traders y de todas las cuentas, flujo agresivo y financiación. Ver [Futuros](#futuros-de-binance).
 - **Usa algoritmos cuantitativos**: VPIN, lambda de Kyle, Amihud, exponente de Hurst, rendimientos logarítmicos, criterio de Kelly y ratio de Sharpe deflactado. Ver [Algoritmos](#algoritmos-y-lo-que-midieron).
 - **Se protege** como Freqtrade:
   - tras cerrar una operación, espera 20 velas antes de volver a operar esa moneda;
@@ -82,6 +83,38 @@ En este mercado no hay leyes fijas. Cada algoritmo se midió con 150 días de 16
 | **Evidencia con memoria que se desvanece** + bayes empírico | Probabilidad de que un contexto tenga ventaja, dando más peso a lo reciente | En 150 días la ventaja se mantuvo, así que no mejoró el resultado. Es un seguro: con 30 días de memoria cuesta ~0,4%; con 10 días costaba 3% | Escala o apaga cada contexto |
 | **Ratio de Sharpe deflactado** (Bailey y López de Prado) | Si la mejor de N combinaciones es buena o solo suerte | La "mejor" combinación de 216 dio 0,42 en capitulación y 0,08 en divisas: probablemente suerte | El aprendizaje solo adopta parámetros nuevos con ≥ 0,9 |
 
+## Futuros de Binance
+
+| Dato | Qué indica |
+| --- | --- |
+| Interés abierto (OI) | Cuántos contratos hay abiertos. Si sube de golpe, entra apalancamiento; si cae de golpe, hay liquidaciones o cierres |
+| Largos/cortos de los grandes traders | Posición de las ballenas: el 20% de cuentas con más margen, por número de cuentas y por tamaño |
+| Largos/cortos de todas las cuentas | Hacia dónde está cargada la multitud |
+| Flujo agresivo en futuros | Compras frente a ventas a mercado |
+| Financiación | Lo que pagan los largos a los cortos (o al revés): mide cuán cargado está un lado |
+
+**De dónde salen:**
+
+- **Historia**: el archivo público de Binance (`data.binance.vision`), con días completos hasta ayer, accesible desde cualquier país. Se guarda en `data/futuros/`.
+- **Últimas horas**: la API de futuros (`fapi.binance.com`), disponible en México pero no en EE. UU. Si no responde, el bot sigue con el archivo, y el día en curso queda sin datos de futuros.
+- **Liquidaciones individuales**: ya no se publican en el archivo histórico.
+
+**Lo que se midió** (150 días, 15 pares con contrato; DODO no tiene):
+
+| Lectura | Después | ¿Se repite? |
+| --- | --- | --- |
+| **OI sube ≥3% en 30 min** (entra apalancamiento de golpe) | **−0,2% a −0,6% en 4 h**, frente a −0,09% y +0,12% de referencia | **Sí, en ambos tramos**, suba o baje el precio en ese momento. Se confirmó también en los últimos 60 días |
+| OI cae, extremos de ballenas o de la multitud, financiación negativa | Como la referencia | No |
+| Capitulación con OI cayendo (liquidaciones) frente a OI estable | +0,32% frente a −0,17% en el tramo antiguo; +1,07% frente a +1,46% en el reciente | **No: se invierte**. No se usa como filtro |
+
+**Cómo los usa el bot:**
+
+- `scan` muestra el estado de futuros de cada moneda.
+- `estudiar` mide sus huellas con datos nuevos.
+- La capa adaptativa registra cómo le va a cada estrategia según el estado de futuros.
+
+Usar esos contextos para cambiar el tamaño de las posiciones **empeoró** el resultado en la prueba sin mirar al futuro: factor de beneficio 1,67 frente a 1,85 sin contextos y 1,82 solo con la evidencia del grupo. Por eso está desactivado (`adaptive.useContexts: false`). Se puede activar si algún día los datos lo respaldan.
+
 ## Comparación con otros bots
 
 | | Este bot | Freqtrade | Hummingbot | Jesse | OctoBot | 3Commas / Pionex |
@@ -97,7 +130,8 @@ En este mercado no hay leyes fijas. Cada algoritmo se midió con 150 días de 16
 | Interfaz web | No | Sí | Sí | Sí | Sí | Sí |
 | Market making / arbitraje | No | No | **Sí** | No | No | No |
 | Grid / DCA | No | Con estrategias | Sí | No | Sí | **Sí** |
-| Futuros y apalancamiento | No | Sí | Sí | Sí | Sí | Sí |
+| Datos de futuros (interés abierto, largos/cortos, financiación) | Sí, medidos | Sí | Sí | Sí | Parcial | Parcial |
+| Operar futuros y apalancamiento | No | Sí | Sí | Sí | Sí | Sí |
 
 Lo que falta y por qué:
 
@@ -192,7 +226,8 @@ Los precios de cripto salen de `data-api.binance.vision`, el servicio público d
 | `crypto.exchange` | `binance` (por defecto), `kraken`, `bybit`, `okx`… |
 | `crypto.reference` | Mercado que indica si cae todo el mercado (`BTC/USDT`) |
 | `crypto.autoPairs` | `enabled`, volumen diario (`minVolumeUsd`, `maxVolumeUsd`), `maxSpreadPct`, `minAgeDays`, `minTrades`, `max`, `timeframe`, `strategy`, `refreshHours`, `exclude` |
-| `adaptive` | `enabled`, cada cuántas horas (`everyHours` 4), ventana (`windowDays` 60), memoria (`halfLifeDays` 30), peso del grupo (`priorTrades` 5), probabilidades mínima (0,55) y para tamaño completo (0,7) |
+| `crypto.futures` | Datos de futuros de Binance (`true`) |
+| `adaptive` | `enabled`, cada cuántas horas (`everyHours` 4), ventana (`windowDays` 60), memoria (`halfLifeDays` 30), peso del grupo (`priorTrades` 5), probabilidades mínima (0,55) y para tamaño completo (0,7), `useContexts` (`false`: decide la evidencia del grupo) |
 | `protections` | `cooldownBars` (20), `stopGuardCount` (3) stops en `stopGuardMinutes` (60) → pausa de `stopGuardPauseMinutes` (240) |
 | `crypto.markets`, `forex.markets` | `{ "symbol": "CHZ/USDT", "timeframe": "3m", "strategy": "capitulacion", "params": { … } }` |
 
@@ -234,7 +269,6 @@ pm2 logs trading-bot
 
 - El backtest simula comisiones, deslizamiento y spread, pero no la profundidad real del libro de órdenes ni caídas del exchange.
 - En pares de poco volumen, el límite de liquidez deja posiciones pequeñas. Esta estrategia no escala a cuentas grandes.
-- Los datos de futuros (liquidaciones, financiación y posición de los grandes traders) darían más pistas sobre las cascadas, pero todavía no se usan.
 - Yahoo Finance (divisas) es un servicio no oficial y solo para uso personal.
 
 ## Desarrollo
@@ -249,6 +283,7 @@ npm test          # compila y ejecuta las pruebas, sin conexión
 | `research.ts` | Huellas de ballenas y estudio de eventos |
 | `learn.ts` | Aprendizaje con validación en datos no vistos |
 | `engine.ts`, `backtest.ts` | Bucle del bot y backtest de cartera, con las mismas reglas |
+| `data/futures.ts`, `data/zip.ts` | Futuros de Binance (archivo público y API) |
 | `quant.ts`, `adaptive.ts` | Algoritmos cuantitativos (VPIN, Kyle, Amihud, Hurst, Kelly, Sharpe deflactado) y capa adaptativa |
 | `protections.ts`, `pairs.ts`, `verify.ts` | Protecciones, lista dinámica de pares, detección de sesgo de anticipación |
 | `risk.ts`, `stops.ts` | Tamaño de posición, límites, stops, objetivo y stop dinámico |

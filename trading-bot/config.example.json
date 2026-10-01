@@ -25,6 +25,16 @@
     "stopGuardMinutes": 60,
     "stopGuardPauseMinutes": 240
   },
+  "adaptive": {
+    "enabled": true,
+    "everyHours": 4,
+    "windowDays": 60,
+    "halfLifeDays": 30,
+    "priorTrades": 5,
+    "minProbability": 0.55,
+    "fullProbability": 0.7,
+    "useContexts": false
+  },
   "strategies": {
     "capitulacion": {
       "lookback": 10,
@@ -62,6 +72,8 @@
     "exchange": "binance",
     "broker": "paper",
     "sandbox": true,
+    "futures": true,
+    "reference": "BTC/USDT",
     "markets": [
       { "symbol": "APE/USDT", "timeframe": "3m", "strategy": "capitulacion" },
       { "symbol": "ALICE/USDT", "timeframe": "3m", "strategy": "capitulacion" },
