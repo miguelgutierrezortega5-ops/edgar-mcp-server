@@ -37,6 +37,9 @@ Token-efficient workflow: put research scripts in the scratchpad, cache klines t
 - Futures (150 days, 15 pairs): open interest +3% in 30 min was followed by -0.2% to -0.6% over 4 h in both halves (baseline -0.09%/+0.12%), confirmed again on the last 60 days. Other futures readings track the baseline. Capitulation split by open-interest change flips between halves: not a filter.
 - Adaptive sizing by context (toxicity, liquidity, futures), even judged one dimension at a time, did worse than the group-only evidence (PF 1.67 vs 1.82; none 1.85): `useContexts` is off by default.
 
+- $50 challenge (150 days + 10,000-path day-block bootstrap): more risk per trade or fewer, larger positions made results worse (2%/50%: -3%; 5%/100%: -11%); the best was diversified (1% risk, 12.5% per position, 8 positions: +8.0%, drawdown 2%). P(50 -> 250 within a year) was 0% at every level. Do not promise growth targets; size small and spread out.
+- Paper/backtests now enforce Binance's 5 USD minimum order and spot cash (no leverage): needed for small accounts.
+
 ## Ideas not yet tested
 
 - Live liquidation stream (`!forceOrder@arr` websocket, from Mexico) to time cascades; the archive no longer has liquidations.

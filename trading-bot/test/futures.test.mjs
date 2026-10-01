@@ -5,14 +5,17 @@ import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
 import { after, afterEach, test } from "node:test";
 import { assess, futuresState, scaleFor } from "../dist/adaptive.js";
-import { alignToBars, FuturesSource, openInterestChange, parseMetricsCsv } from "../dist/data/futures.js";
+import { alignToBars, FuturesSource, openInterestChange, parseMetricsCsv, resetFuturesLive } from "../dist/data/futures.js";
 import { firstZipEntry } from "../dist/data/zip.js";
 import { features, footprintsAt } from "../dist/research.js";
 import { T0 } from "./helpers.mjs";
 
 const realFetch = globalThis.fetch;
 const dirs = [];
-afterEach(() => (globalThis.fetch = realFetch));
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  resetFuturesLive();
+});
 after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const M5 = 5 * 60_000;
 

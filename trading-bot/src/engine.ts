@@ -5,6 +5,7 @@ import * as fmt from "./fmt.js";
 import type { Command, Notifier } from "./notify.js";
 import { contexts, describeArm, scaleFor, type AdaptiveState } from "./adaptive.js";
 import type { FuturesPoint } from "./data/futures.js";
+import { committedCash } from "./brokers/paper.js";
 import { blocked, onClose } from "./protections.js";
 import { averageBarValue, canOpen, newRiskState, positionSize, updateRisk } from "./risk.js";
 import { checkStops, trailStop, type Bar } from "./stops.js";
@@ -335,7 +336,9 @@ export class Bot {
       params: this.d.config.risk,
       barValue: averageBarValue(closed),
     });
-    const units = broker.normalizeUnits(m, size, mark.price);
+    // Spot has no leverage: never commit more cash than the account has free.
+    const free = m.type === "crypto" ? (equity - committedCash(this.state.positions.filter((p) => p.broker === broker.name), (p) => this.marks.get(p.marketId))) / (mark.price * mark.rate) : Infinity;
+    const units = broker.normalizeUnits(m, Math.min(size, free * 0.995), mark.price);
     if (!(units > 0)) return this.d.log(`${label} ignorada: el tamaño (${size.toPrecision(3)}) queda por debajo del mínimo del mercado`);
 
     const pos = await broker.open({

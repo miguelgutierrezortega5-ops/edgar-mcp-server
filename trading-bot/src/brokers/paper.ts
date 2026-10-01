@@ -8,6 +8,8 @@ export interface PaperCosts {
   cryptoSlippagePct: number;
   /** Full bid/ask spread in pips; each side pays half. */
   forexSpreadPips: number;
+  /** Smallest crypto order, in quote currency (Binance spot: 5 USDT). */
+  minOrderUsd?: number;
 }
 
 export interface PaperBook {
@@ -25,10 +27,19 @@ export function fillPrice(market: Market, buy: boolean, mid: number, costs: Pape
   return mid + (dir * costs.forexSpreadPips * pipSize(market)) / 2;
 }
 
-/** Whole units for forex (as OANDA), 8 decimals for crypto. */
-export function paperUnits(market: Market, units: number): number {
+/** Whole units for forex (as OANDA), 8 decimals for crypto; 0 below the exchange's minimum order. */
+export function paperUnits(market: Market, units: number, price = 0, minOrder = 0): number {
   const rounded = market.type === "forex" ? Math.floor(units) : Math.floor(units * 1e8) / 1e8;
+  if (market.type === "crypto" && minOrder > 0 && rounded * price < minOrder) return 0;
   return rounded > 0 ? rounded : 0;
+}
+
+/** Value of the open spot crypto positions, in account currency: cash already committed. */
+export function committedCash(positions: Position[], marks: (p: Position) => { price: number; rate: number } | undefined): number {
+  return positions.filter((p) => p.type === "crypto" && p.side === "long").reduce((sum, p) => {
+    const m = marks(p);
+    return sum + p.units * (m?.price ?? p.entryPrice) * (m?.rate ?? 1);
+  }, 0);
 }
 
 function fee(market: Market, value: number, costs: PaperCosts): number {
@@ -96,8 +107,8 @@ export class PaperBroker implements Broker {
     return this.account.equity(positions, marks);
   }
 
-  normalizeUnits(market: Market, units: number): number {
-    return paperUnits(market, units);
+  normalizeUnits(market: Market, units: number, price: number): number {
+    return paperUnits(market, units, price, this.account.costs.minOrderUsd ?? 0);
   }
 
   async open(req: OpenRequest): Promise<Position> {

@@ -83,6 +83,36 @@ En este mercado no hay leyes fijas. Cada algoritmo se midió con 150 días de 16
 | **Evidencia con memoria que se desvanece** + bayes empírico | Probabilidad de que un contexto tenga ventaja, dando más peso a lo reciente | En 150 días la ventaja se mantuvo, así que no mejoró el resultado. Es un seguro: con 30 días de memoria cuesta ~0,4%; con 10 días costaba 3% | Escala o apaga cada contexto |
 | **Ratio de Sharpe deflactado** (Bailey y López de Prado) | Si la mejor de N combinaciones es buena o solo suerte | La "mejor" combinación de 216 dio 0,42 en capitulación y 0,08 en divisas: probablemente suerte | El aprendizaje solo adopta parámetros nuevos con ≥ 0,9 |
 
+## Reto: 50 USD
+
+`config.reto50.json` simula una cuenta de 50 USD en Binance:
+
+- 12 pares de bajo volumen en 3m;
+- orden mínima de 5 USD, como Binance;
+- sin gastar más efectivo del que hay, porque en spot no hay apalancamiento.
+
+```bash
+npm run bot -- --config config.reto50.json      # estado: npm run status -- --config config.reto50.json
+```
+
+Antes de arrancarlo se midió qué tamaño de apuesta da más opciones de convertir 50 en 200-250 USD. Primero se probó cada nivel con los últimos 150 días. Después se armaron 10.000 años posibles a partir de días reales tomados al azar (enteros, para no romper los días de cascada):
+
+| Nivel de riesgo | 150 días reales | P(llegar a 250 en un año) | P(caer a 25) | Mediana al año |
+| --- | --- | --- | --- | --- |
+| **Diversificado: 1% por operación, 12,5% por posición, 8 posiciones** (el del reto) | **54,01 USD (+8,0%)**, caída máxima 2% | 0% | 0% | 60 USD |
+| Prudente: 1%, 25%, 4 posiciones | 53,87 USD (+7,7%) | 0% | 0% | 59 USD |
+| Media: 2%, 50%, 4 posiciones | 48,52 USD (−3,0%) | 0% | 0% | 46 USD |
+| Alta: 3%, 100%, 3 posiciones | 46,51 USD (−7,0%) | 0% | 1,4% | 42 USD |
+| Muy alta: 5%, 100%, 2 posiciones | 44,39 USD (−11,2%) | 0% | 4,8% | 38 USD |
+| Todo dentro: 10%, 100%, 1 posición | 45,93 USD (−8,1%) | 0% | 4,3% | 41 USD |
+
+**Lo que enseñó:**
+
+- **Más riesgo empeora el resultado.** La ventaja está en muchas apuestas pequeñas y repartidas. Si se concentra, un solo día de cascada con 2 o 3 stops se come semanas de ganancia, y las protecciones paran el bot justo antes de los rebotes.
+- **Con la ventaja medida, convertir 50 en 250 no es realista**: ningún nivel lo consiguió en un año simulado, y forzarlo solo aumenta la probabilidad de perder.
+
+El reto sigue en simulación para medir la ventaja con el mercado de ahora.
+
 ## Futuros de Binance
 
 | Dato | Qué indica |

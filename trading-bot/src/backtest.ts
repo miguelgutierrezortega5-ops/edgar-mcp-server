@@ -1,5 +1,5 @@
 import { unrealized } from "./brokers/broker.js";
-import { PaperAccount, paperUnits, type PaperCosts } from "./brokers/paper.js";
+import { committedCash, PaperAccount, paperUnits, type PaperCosts } from "./brokers/paper.js";
 import { blocked, newProtectionState, onClose, type ProtectionParams } from "./protections.js";
 import { averageBarValue, canOpen, newRiskState, positionSize, updateRisk, type RiskParams } from "./risk.js";
 import { checkStops, trailStop } from "./stops.js";
@@ -149,7 +149,12 @@ export function simulate(o: PortfolioOptions): PortfolioResult {
               barValue: averageBarValue(s.candles.slice(Math.max(0, i - 50), i)),
             });
             const scale = o.sizeScale ? o.sizeScale(s.market, i - 1, bar.time) : 1;
-            const units = paperUnits(s.market, size * scale);
+            // Spot has no leverage: never commit more cash than the account has free.
+            const free = s.market.type === "crypto" ? (eq - committedCash(S.flatMap((x) => (x.pos ? [x.pos] : [])), (p) => {
+              const x = S.find((y) => y.pos === p)!;
+              return { price: x.lastClose, rate: x.rateAt(x.lastClose) };
+            })) / (bar.open * rate) : Infinity;
+            const units = paperUnits(s.market, Math.min(size * scale, free * 0.995), bar.open, o.costs.minOrderUsd ?? 0);
             if (!(scale > 0)) skipped++;
             if (units > 0) {
               const p = account.open({ market: s.market, side: sig.entry.side, units, price: bar.open, rate, stopDistance: sig.entry.stopDistance, takeProfitDistance: sig.entry.takeProfitDistance, time: bar.time });

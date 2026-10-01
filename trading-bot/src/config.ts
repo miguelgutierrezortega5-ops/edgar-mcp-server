@@ -34,6 +34,7 @@ const configSchema = z
         cryptoFeePct: z.number().min(0).max(2).default(0.1),
         cryptoSlippagePct: z.number().min(0).max(2).default(0.05),
         forexSpreadPips: z.number().min(0).max(50).default(1.2),
+        minOrderUsd: z.number().min(0).default(5),
       })
       .strict()
       .default({}),

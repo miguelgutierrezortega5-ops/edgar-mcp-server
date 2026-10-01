@@ -116,3 +116,21 @@ test("state files from the shared-paper-account version are migrated", () => {
   assert.equal(s.positions[0].broker, "paper-forex");
   assert.deepEqual(s.protections, { cooldownUntil: {}, recentStops: [], pausedUntil: 0 });
 });
+
+test("$50 accounts: Binance's 5 USD minimum order and no more cash than the account has", async () => {
+  const { paperUnits, committedCash } = await import("../dist/brokers/paper.js");
+  const btc = market("BTC/USD");
+  assert.equal(paperUnits(btc, 0.00009, 50_000, 5), 0); // 4.5 USD
+  assert.equal(paperUnits(btc, 0.0001, 50_000, 5), 0.0001); // 5 USD
+  assert.equal(paperUnits(market("EUR/USD"), 10, 1.1, 5), 10); // forex has no such minimum here
+  const open = [{ type: "crypto", side: "long", units: 2, entryPrice: 10, marketId: "A" }, { type: "forex", side: "long", units: 1000, entryPrice: 1, marketId: "B" }];
+  assert.equal(committedCash(open, () => ({ price: 12, rate: 1 })), 24);
+  // Four identical markets wanting 40% of a 50 USD account each: only two fit in cash.
+  const candles = bars(vShape());
+  const series = ["A/USD", "B/USD", "C/USD", "D/USD"].map((s) => ({ market: market(s, { type: "crypto" }), candles, rateAt: () => 1 }));
+  const r = simulate({ series, risk: { ...RISK, riskPerTradePct: 50, maxNotionalPct: { crypto: 40, forex: 500 }, maxOpenPositions: 4 }, costs: { ...COSTS, minOrderUsd: 5 }, startingBalance: 50 });
+  const first = r.trades.filter((t) => t.openedAt === r.trades[0].openedAt);
+  const committed = first.reduce((a, t) => a + t.units * t.entryPrice, 0);
+  assert.ok(committed <= 50, `committed ${committed}`);
+  assert.ok(first.length < 4);
+});
