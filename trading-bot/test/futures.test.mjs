@@ -133,3 +133,30 @@ test("diagnostico names geo-blocked Binance endpoints and what the bot loses", a
   assert.ok(checks.find((c) => c.name === "Binance datos de mercado (spot)").ok);
   assert.ok(!checks.some((c) => c.name === "Telegram"));
 });
+
+test("Binance candles: long histories are cached on disk and later runs download only new bars", async () => {
+  const { BinanceSource } = await import("../dist/data/binance.js");
+  const dir = mkdtempSync(join(tmpdir(), "velas-"));
+  dirs.push(dir);
+  const step = 3 * 60_000;
+  const now = Date.now();
+  const start = Math.floor((now - 3000 * step) / step) * step;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const from = Number(new URL(url).searchParams.get("startTime"));
+    calls.push(from);
+    const rows = [];
+    for (let t = from; t <= now && rows.length < 1000; t += step) rows.push([t, "1", "2", "0.5", "1.5", "10", 0, "15", 3, "6", "9", "0"]);
+    return new Response(JSON.stringify(rows));
+  };
+  const m = { base: "ALT", quote: "USDT", timeframe: "3m" };
+  const first = await new BinanceSource(dir).history(m, start);
+  assert.ok(first.length >= 3000);
+  const firstCalls = calls.length;
+  const again = await new BinanceSource(dir).history(m, start); // new instance: reads the disk cache
+  assert.equal(again.length, first.length);
+  assert.equal(calls.length - firstCalls, 1); // only the tail
+  assert.ok(calls.at(-1) >= first.at(-2).time);
+  const recent = await new BinanceSource(dir).history(m, now - 10 * step); // small refresh: straight download
+  assert.ok(recent.length <= 11);
+});

@@ -36,6 +36,45 @@ cp config.example.json config.json
 cp .env.example .env             # solo si vas a usar claves o Telegram
 ```
 
+## Desde el celular (Android)
+
+El bot corre en el propio teléfono con [Termux](https://f-droid.org/packages/com.termux/), una terminal de Linux para Android. Usa tu conexión de México, así que los futuros de Binance llegan en vivo. Es gratis y no necesitas computadora.
+
+1. Instala **Termux desde F-Droid** (la versión de Google Play está abandonada): entra a [f-droid.org/packages/com.termux](https://f-droid.org/packages/com.termux/) y descarga el APK.
+2. Abre Termux y pega este comando (tarda unos minutos):
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/miguelgutierrezortega5-ops/edgar-mcp-server/ccr-6370af02-zxtdm6/trading-bot/scripts/android/instalar.sh | bash
+   ```
+   Al final muestra el diagnóstico: "Binance futuros en vivo" debería salir con ✓.
+3. Arranca el reto de 50 USD (simulado):
+   ```bash
+   bash ~/edgar-mcp-server/trading-bot/scripts/android/iniciar.sh
+   ```
+4. Para consultarlo: `bash ~/edgar-mcp-server/trading-bot/scripts/android/estado.sh`. Para pararlo: `detener.sh`. Para instalar una versión nueva: `actualizar.sh` (los dos en la misma carpeta).
+
+**Para que Android no lo duerma:**
+
+- en Ajustes → Aplicaciones → Termux → Batería, elige "Sin restricciones";
+- deja la notificación de Termux activa ("wake lock").
+
+El bot solo opera mientras el teléfono está encendido y con conexión.
+
+**Datos móviles:**
+
+- el primer aprendizaje descarga unos 100 MB de historia, así que mejor hazlo con WiFi;
+- después, las velas quedan guardadas en `data/velas` y el bot usa unos 50 MB al día.
+
+**Recomendado: avísate y contrólalo por Telegram.**
+
+1. En Telegram, habla con @BotFather, usa `/newbot` y copia el token que te da.
+2. Habla con @userinfobot para saber tu número de chat.
+3. En Termux, abre el archivo de claves con `nano ~/edgar-mcp-server/trading-bot/.env` y rellena `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`.
+4. Detén y vuelve a arrancar el bot.
+
+A partir de ahí recibes cada operación en Telegram y puedes escribirle `/estado`, `/pausa` o `/cerrar`.
+
+**iPhone:** iOS no permite ejecutar este tipo de programas. La alternativa es un servidor en la nube ubicado en México (Oracle Cloud tiene regiones en Querétaro y Monterrey, AWS y Azure también), que se maneja desde el navegador del teléfono, con Telegram para el día a día. Comprueba al contratar qué incluye el plan gratuito en esas regiones.
+
 ## Ejecutarlo desde México (o desde cualquier país donde opere Binance)
 
 Binance responde "451: ubicación restringida" a los equipos de EE. UU. y otros países donde no opera. Desde un equipo en México funcionan los futuros en vivo y las órdenes en Binance (testnet o real). Comprueba qué responde desde tu equipo:
