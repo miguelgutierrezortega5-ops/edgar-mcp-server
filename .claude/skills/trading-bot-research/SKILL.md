@@ -18,6 +18,8 @@ The bot lives in `trading-bot/` (TypeScript, `npm test` offline). Read `trading-
 
 Data: `data-api.binance.vision/api/v3/klines` (public, global, includes taker-buy volume) via `src/data/binance.ts`. Futures positioning via `src/data/futures.ts`: `data.binance.vision` daily `metrics` zips (5-min open interest, top-trader and global long/short ratios, taker ratio; complete days up to yesterday, reachable from US containers) and monthly `fundingRate`; `fapi.binance.com` fills the current day but is geo-blocked from US containers (works from Mexico). Liquidation snapshots are no longer in the archive.
 
+Before telling the user to install or update anything, test a fresh clone from GitHub (`git clone --branch ... && npm install && npm test`): a too-broad `.gitignore` once kept `src/data/` out of the repo while the working copy built fine. The user runs the bot on an Android phone (Termux, `scripts/android/`), so it must build with pure-JavaScript TypeScript 5 and keep data usage low (candle cache in `data/velas`).
+
 Token-efficient workflow: put research scripts in the scratchpad, cache klines to disk, print one compact table per run, and reuse `npm run estudiar` / `npm run aprender` instead of ad-hoc dumps.
 
 ## Findings so far (Binance spot, 16 pairs of $1-8M/day, 3m bars, May-Oct 2026)
