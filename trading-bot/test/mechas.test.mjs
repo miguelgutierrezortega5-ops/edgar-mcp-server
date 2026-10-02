@@ -214,6 +214,22 @@ test("every variant is followed in the shadow, and the active one matches the re
   assert.match(bot.summary(T0 + 340 * MIN), /En la sombra: midiendo 12 variantes/);
 });
 
+test("the owner hears of each entry, and the first real trade publishes a report once", () => {
+  const sent = [];
+  let reports = 0;
+  const bot = new MechasBot({ config: config({ shorts: false }), source: {}, notify: async (t) => void sent.push(t), log: () => {}, now: () => T0, onFirstTrade: () => reports++ });
+  bot.setCoins([{ symbol: "XUSDT", range: 0.2, tick: 0 }], T0);
+  // Two wicks that stay open after the fill (close at 97, between stop and target), each recovering later;
+  // the second once the first has left the 240-minute volatility window.
+  const wick = (i) => (i === 270 || i === 560 ? bar(T0 + i * MIN, 100, 100.1, 95, 97) : (i > 270 && i < 275) || (i > 560 && i < 565) ? bar(T0 + i * MIN, 97, 97.5, 96.5, 97) : null);
+  run(bot, market(wick), 600);
+  assert.equal(bot.state.closed.length, 2);
+  assert.equal(sent.filter((t) => / entra a /.test(t)).length, 2);
+  assert.match(sent.find((t) => / entra a /.test(t)), /^🪝 X compra en mecha: entra a 9\d.* con 7\.50 USD, objetivo .*, stop .*, máximo 30 min/);
+  assert.equal(reports, 1);
+  assert.equal(bot.state.firstTradeAt, T0 + 270 * MIN);
+});
+
 /** A shadow with `days` complete days where `better` earned `edge` more per day than the active variant. */
 function shadowWith(days, better, edge, today) {
   const s = emptyShadow("k4 obj1 stop1 30m", today - days);

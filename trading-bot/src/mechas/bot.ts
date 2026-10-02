@@ -69,6 +69,8 @@ export interface MechasState {
   outcomes: Outcome[];
   /** Entry/exit variants followed in the shadow (absent in states saved before they existed). */
   shadow?: ShadowState;
+  /** When the first real trade was entered. */
+  firstTradeAt?: number;
 }
 
 const MINUTE = 60_000;
@@ -113,6 +115,8 @@ export interface MechasDeps {
   /** Folder for the state and the trade log; absent = nothing is saved (backtests). */
   dir?: string;
   now?: () => number;
+  /** Called once, on the account's first real trade. */
+  onFirstTrade?: () => void;
 }
 
 export class MechasBot {
@@ -148,7 +152,12 @@ export class MechasBot {
 
   private load(): MechasState {
     const file = this.d.dir && join(this.d.dir, "estado.json");
-    if (file && existsSync(file)) return JSON.parse(readFileSync(file, "utf8")) as MechasState;
+    if (file && existsSync(file)) {
+      const s = JSON.parse(readFileSync(file, "utf8")) as MechasState;
+      // Saved before firstTradeAt existed: an earlier real trade already was the first.
+      s.firstTradeAt ??= s.closed[0]?.openedAt ?? s.positions.find((p) => !p.virtual)?.openedAt;
+      return s;
+    }
     const b = this.d.config.startingBalance;
     return { version: 1, balance: b, startingBalance: b, coins: [], coinsAt: 0, lastMinute: 0, pending: [], positions: [], closed: [], outcomes: [] };
   }
@@ -256,12 +265,23 @@ export class MechasBot {
       if (!order.virtual && this.state.positions.filter((x) => !x.virtual).length >= this.d.config.maxPositions) order.virtual = true;
       const { position, closed } = fill(order, bar, this.paramsFor(order.side));
       this.state.positions.push(position);
+      if (!position.virtual && !closed) this.announceEntry(position);
       if (closed) this.settle(position, closed);
+      if (!position.virtual && !this.state.firstTradeAt) {
+        this.state.firstTradeAt = t;
+        this.d.onFirstTrade?.();
+      }
     }
     shadowMinute(this.shadow, [...this.variants.values()], this.state.coins, t, this.market, p, this.d.config.shorts);
     if (dayOf(t) > this.shadow.checkedDay) this.retune(dayOf(t));
     if (live) this.placeOrders(t);
     this.state.lastMinute = t;
+  }
+
+  private announceEntry(pos: Position): void {
+    const text = `🪝 ${short(pos.symbol)} ${sideName(pos.side)}: entra a ${fmt.price(pos.entry)} con ${fmt.money(pos.notional, "USD")}, objetivo ${fmt.price(pos.takeProfit)}, stop ${fmt.price(pos.stopLoss)}, máximo ${Math.round((pos.expiresAt - pos.openedAt) / MINUTE)} min. Estimaba ganar el ${(pos.predicted.pWin * 100).toFixed(0)}% de las veces`;
+    this.d.log(text);
+    void this.d.notify(text);
   }
 
   private readonly market = {

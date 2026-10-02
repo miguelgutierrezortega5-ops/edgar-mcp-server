@@ -219,7 +219,7 @@ El reto sigue en simulación para medir la ventaja con el mercado de ahora.
 
 ## Reto 2: cazador de mechas (50 USD, operaciones de minutos)
 
-Una segunda cuenta simulada de 50 USD, aparte del reto 1, que opera altcoins en futuros de Binance con órdenes de 1 minuto, comprando y vendiendo en corto. Corre en el mismo bot y el mismo Telegram (`/mechas`). Se enciende con `"mechas": { "enabled": true }` y ya viene encendido en `config.reto50.json`.
+Una segunda cuenta simulada de 50 USD, aparte del reto 1, que opera altcoins en futuros de Binance con órdenes de 1 minuto, comprando y vendiendo en corto. Corre en el mismo bot y el mismo Telegram (`/mechas`), y te avisa al entrar (precio, objetivo y stop) y al salir de cada operación. En su primera operación publica además un informe fijado para que Claude la revise. Se enciende con `"mechas": { "enabled": true }` y ya viene encendido en `config.reto50.json`.
 
 **Cómo opera.** Cada minuto deja, en cada moneda, una orden de compra por debajo del precio y una de venta en corto por encima. La distancia es de 4 veces la volatilidad de 15 minutos de la moneda, normalmente entre 2% y 6%. Es tu escalera de "compro si baja a 2.9, vendo si sube a 3.1", calculada para cada moneda según cuánto se mueve. Si una mecha (una barrida de stops o un libro de órdenes vacío por un instante) llega a la orden, entra:
 

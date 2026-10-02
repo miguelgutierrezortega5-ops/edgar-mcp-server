@@ -458,7 +458,8 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const { sources: src, fx } = buildSources(config, markets);
   const brokers = buildBrokers(config, markets, state);
   const notify = telegramNotifier(config.telegram.enabled, log);
-  const mechas = config.mechas.enabled ? mechasBot(config, notify) : undefined;
+  // Its first real trade also publishes a report, so Claude can follow it up (without moving the daily one).
+  const mechas = config.mechas.enabled ? mechasBot(config, notify, () => void sendReport("primera operación del reto 2").catch(() => undefined)) : undefined;
   const learning = config.learning;
   const relearn = async () => {
     const last = loadLearning(config.dataDir);
@@ -481,7 +482,8 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const realMoney = Object.values(brokers).some((b) => b?.realMoney);
   const autoUpdate = config.updates.auto && !realMoney && !!process.env.BOT_SUPERVISOR;
   const reporter = telegramReporter(config.telegram.enabled, log);
-  const sendReport = async (): Promise<boolean> => {
+  /** The pinned report for Claude; with a `reason` it is an extra one and the daily schedule stays as it was. */
+  const sendReport = async (reason?: string): Promise<boolean> => {
     if (!reporter) return false;
     const now = Date.now();
     const version = await currentVersion(process.cwd());
@@ -500,8 +502,9 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
       reto2: mechas?.report(),
       registro: logTail,
     };
-    const ok = await reporter(`informe-${body.generado.slice(0, 16).replace(":", "")}.json`, JSON.stringify(body, null, 1), caption(`📊 Informe para Claude (${describeVersion(version)})\n${body.estado}`));
-    if (ok) markReported(config.dataDir, now);
+    const title = `📊 Informe para Claude${reason ? `: ${reason}` : ""} (${describeVersion(version)})`;
+    const ok = await reporter(`informe-${body.generado.slice(0, 16).replace(":", "")}.json`, JSON.stringify(body, null, 1), caption(`${title}\n${reason && mechas ? mechas.summary(now) : body.estado}`));
+    if (ok && !reason) markReported(config.dataDir, now);
     return ok;
   };
   let rounds = 0;
@@ -609,8 +612,8 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   await Promise.all([bot.run(controller.signal), mechas?.run(controller.signal)]);
 }
 
-const mechasBot = (config: Config, notify: (text: string) => Promise<void>) =>
-  new MechasBot({ config: config.mechas, source: new FuturesMinutes(join(config.dataDir, "velas1m"), log), notify, log, dir: join(config.dataDir, "mechas") });
+const mechasBot = (config: Config, notify: (text: string) => Promise<void>, onFirstTrade?: () => void) =>
+  new MechasBot({ config: config.mechas, source: new FuturesMinutes(join(config.dataDir, "velas1m"), log), notify, log, dir: join(config.dataDir, "mechas"), onFirstTrade });
 
 async function runMechas(config: Config, days: number, manual?: string, until?: string): Promise<void> {
   const src = new FuturesMinutes(join(config.dataDir, "velas1m"), log);
