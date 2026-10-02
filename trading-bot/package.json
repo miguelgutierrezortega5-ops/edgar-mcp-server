@@ -1,0 +1,34 @@
+{
+  "name": "trading-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Crypto and forex trading bot: market monitoring, EMA/RSI/ATR strategy, risk management, paper trading, backtesting and optional live execution (ccxt exchanges, OANDA)",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "clean": "rm -rf dist",
+    "bot": "node dist/index.js run",
+    "scan": "node dist/index.js scan",
+    "backtest": "node dist/index.js backtest",
+    "status": "node dist/index.js status",
+    "estudiar": "node dist/index.js estudiar",
+    "aprender": "node dist/index.js aprender",
+    "verificar": "node dist/index.js verificar",
+    "diagnostico": "node dist/index.js diagnostico",
+    "test": "npm run build && node --test"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "ccxt": "^4.5.84",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "typescript": "^5.9.3"
+  }
+}

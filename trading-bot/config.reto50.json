@@ -1,0 +1,112 @@
+{
+  "dataDir": "data/reto50",
+  "accountCurrency": "USD",
+  "pollSeconds": 30,
+  "historyBars": 720,
+  "paper": {
+    "startingBalance": 50,
+    "cryptoFeePct": 0.1,
+    "cryptoSlippagePct": 0.05,
+    "forexSpreadPips": 1.2
+  },
+  "risk": {
+    "riskPerTradePct": 1,
+    "maxNotionalPct": {
+      "crypto": 12.5,
+      "forex": 500
+    },
+    "maxOpenPositions": 8,
+    "dailyLossLimitPct": 3,
+    "maxDrawdownPct": 15,
+    "maxBarVolumePct": 20
+  },
+  "protections": {
+    "cooldownBars": 20,
+    "stopGuardCount": 3,
+    "stopGuardMinutes": 60,
+    "stopGuardPauseMinutes": 240
+  },
+  "adaptive": {
+    "enabled": true,
+    "everyHours": 4,
+    "windowDays": 60,
+    "halfLifeDays": 30,
+    "priorTrades": 5,
+    "minProbability": 0.55,
+    "fullProbability": 0.7,
+    "useContexts": false
+  },
+  "strategies": {
+    "capitulacion": {
+      "lookback": 10,
+      "dropPct": 3,
+      "relVolume": 4,
+      "volumeAvg": 50,
+      "atrPeriod": 14,
+      "stopAtr": 1.5,
+      "retrace": 1,
+      "maxBars": 40
+    },
+    "cruce_medias": {
+      "fastEma": 20,
+      "slowEma": 50,
+      "trendEma": 200,
+      "rsiPeriod": 14,
+      "rsiOverbought": 70,
+      "rsiOversold": 30,
+      "atrPeriod": 14,
+      "stopAtr": 2,
+      "takeProfitAtr": 4,
+      "trailingStopAtr": 0
+    }
+  },
+  "learning": {
+    "enabled": true,
+    "everyHours": 24,
+    "bars": 75000,
+    "maxDays": 365,
+    "testPct": 30,
+    "minTrades": 30,
+    "minProfitFactor": 1.1
+  },
+  "crypto": {
+    "exchange": "binance",
+    "broker": "paper",
+    "sandbox": true,
+    "futures": true,
+    "reference": "BTC/USDT",
+    "markets": [
+      { "symbol": "APE/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "ALICE/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "DODO/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "TWT/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "CFX/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "MINA/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "CHZ/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "LPT/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "ENS/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "MAGIC/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "AXS/USDT", "timeframe": "3m", "strategy": "capitulacion" },
+      { "symbol": "FLOW/USDT", "timeframe": "3m", "strategy": "capitulacion" }
+    ],
+    "autoPairs": {
+      "enabled": false,
+      "minVolumeUsd": 1000000,
+      "maxVolumeUsd": 8000000,
+      "maxSpreadPct": 0.2,
+      "minAgeDays": 180,
+      "max": 15,
+      "timeframe": "3m",
+      "strategy": "capitulacion"
+    }
+  },
+  "forex": {
+    "broker": "paper",
+    "data": "yahoo",
+    "oandaEnv": "practice",
+    "markets": []
+  },
+  "telegram": {
+    "enabled": true
+  }
+}
