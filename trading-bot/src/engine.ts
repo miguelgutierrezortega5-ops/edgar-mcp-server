@@ -37,7 +37,7 @@ export interface BotDeps {
   futures?: (m: Market, since: number) => Promise<FuturesPoint[]>;
 }
 
-export const COMMAND_HELP = "/estado — saldo, posiciones y pausas\n/pausa — no abrir operaciones nuevas\n/reanudar — quitar pausas y paradas por pérdidas\n/cerrar SIMBOLO|todo — cerrar a mercado\n/actualizar — instalar las mejoras nuevas del bot\n/informe — publicar el informe detallado para Claude\n/ayuda";
+export const COMMAND_HELP = "/estado — saldo, posiciones y pausas\n/pausa — no abrir operaciones nuevas\n/reanudar — quitar pausas y paradas por pérdidas\n/cerrar SIMBOLO|todo — cerrar a mercado\n/mechas — reto 2, cazador de mechas\n/actualizar — instalar las mejoras nuevas del bot\n/informe — publicar el informe detallado para Claude\n/ayuda";
 
 const MAX_RECENT_TRADES = 100;
 

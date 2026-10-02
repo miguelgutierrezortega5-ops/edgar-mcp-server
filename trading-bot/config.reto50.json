@@ -108,5 +108,6 @@
   },
   "telegram": {
     "enabled": true
-  }
+  },
+  "mechas": { "enabled": true }
 }

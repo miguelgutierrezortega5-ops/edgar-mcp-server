@@ -134,6 +134,49 @@ const configSchema = z
       })
       .strict()
       .default({}),
+    /** Challenge 2, the wick hunter (src/mechas): its own simulated futures account, 1-minute orders. */
+    mechas: z
+      .object({
+        enabled: z.boolean().default(false),
+        startingBalance: z.number().positive().default(50),
+        /** The most volatile coins of the last 30 days, re-chosen every `refreshDays`. */
+        coins: z.number().int().min(1).max(40).default(12),
+        refreshDays: z.number().positive().default(7),
+        minVolumeUsd: z.number().min(0).default(20e6),
+        maxVolumeUsd: z.number().positive().default(1.5e9),
+        minAgeDays: z.number().int().min(31).default(60),
+        exclude: z
+          .array(z.string())
+          .default(["BTC", "ETH", "SOL", "BNB", "XRP", "USDC", "FDUSD", "BTCDOM", "DEFI", "XAU", "XAG", "PAXG", "XAUT", "MSTR", "COIN", "CRCL", "HOOD", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "AMD", "INTC", "MU", "MRVL", "PLTR", "RKLB", "NBIS", "SOXL", "SPCX", "EWY", "DRAM", "LITE", "CBRS", "SNXX", "MVLL", "QQQ", "SPY", "CL"]),
+        /** Big coins whose 5-minute move blocks wick buys (falling) and wick shorts (rising). */
+        leaders: z.array(z.string()).default(["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
+        shorts: z.boolean().default(true),
+        k: z.number().positive().default(4),
+        takeProfit: z.number().positive().default(1),
+        stop: z.number().positive().default(1),
+        maxMinutes: z.number().int().positive().default(30),
+        minDistancePct: z.number().min(0).default(0.3),
+        throughPct: z.number().min(0).default(0.02),
+        leaderMovePct: z.number().positive().default(0.2),
+        /** Notional per order, % of the balance; the learner scales it down to 0 (observe only). */
+        orderPct: z.number().positive().max(100).default(15),
+        minOrderUsd: z.number().min(0).default(5),
+        maxPositions: z.number().int().positive().default(4),
+        leverage: z.number().positive().max(20).default(10),
+        makerFeePct: z.number().min(0).default(0.02),
+        takerFeePct: z.number().min(0).default(0.05),
+        slippagePct: z.number().min(0).default(0.1),
+        halfLifeDays: z.number().positive().default(14),
+        /** Backtest prior, worth `priorTrades` trades. */
+        priorTrades: z.number().min(0).default(10),
+        priorMeanPct: z.number().default(0.4),
+        priorWinRate: z.number().min(0).max(1).default(0.65),
+        minTrades: z.number().min(0).default(20),
+        minProbability: z.number().min(0.5).max(0.99).default(0.6),
+        fullProbability: z.number().min(0.5).max(0.999).default(0.85),
+      })
+      .strict()
+      .default({}),
     telegram: z
       .object({
         enabled: z.boolean().default(true),

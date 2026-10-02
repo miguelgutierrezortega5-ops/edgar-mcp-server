@@ -146,6 +146,7 @@ Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env`, el bot avisa de cada op
 | `/cerrar BTC` o `/cerrar todo` | Cierra a mercado |
 | `/actualizar` | Instala las mejoras nuevas del bot y lo reinicia con ellas |
 | `/informe` | Publica ya el informe detallado para Claude (ver abajo) |
+| `/mechas` | Reto 2: saldo, posiciones, y qué tan bien acierta (predicción frente a realidad) |
 
 Los mensajes enviados mientras el bot estaba apagado se descartan, no se ejecutan.
 
@@ -211,6 +212,46 @@ Antes de arrancarlo se midió qué tamaño de apuesta da más opciones de conver
 - **Con la ventaja medida, convertir 50 en 250 no es realista**: ningún nivel lo consiguió en un año simulado, y forzarlo solo aumenta la probabilidad de perder.
 
 El reto sigue en simulación para medir la ventaja con el mercado de ahora.
+
+## Reto 2: cazador de mechas (50 USD, operaciones de minutos)
+
+Una segunda cuenta simulada de 50 USD, aparte del reto 1, que opera altcoins en futuros de Binance con órdenes de 1 minuto, comprando y vendiendo en corto. Corre en el mismo bot y el mismo Telegram (`/mechas`). Se enciende con `"mechas": { "enabled": true }` y ya viene encendido en `config.reto50.json`.
+
+**Cómo opera.** Cada minuto deja, en cada moneda, una orden de compra por debajo del precio y una de venta en corto por encima. La distancia es de 4 veces la volatilidad de 15 minutos de la moneda, normalmente entre 2% y 6%. Es tu escalera de "compro si baja a 2.9, vendo si sube a 3.1", calculada para cada moneda según cuánto se mueve. Si una mecha (una barrida de stops o un libro de órdenes vacío por un instante) llega a la orden, entra:
+
+- el objetivo es volver al precio de antes de la mecha;
+- el stop está a la misma distancia más allá de la entrada;
+- si en 30 minutos no pasa nada, sale.
+
+Las órdenes quedan esperando, así que la entrada ocurre en el segundo exacto de la mecha, aunque el bot revise una vez por minuto.
+
+**Vigilando a las grandes.** Si BTC, ETH o SOL cayeron más de 0.2% en los últimos 5 minutos, no pone compras, porque una mecha durante una caída de las grandes suele seguir bajando. Del mismo modo, si alguna subió más de 0.2%, no pone ventas en corto.
+
+**Qué monedas.** Cada semana elige las 12 altcoins más volátiles de los últimos 30 días entre los futuros con 20 M a 1.5 B USD de volumen diario y al menos 60 días de historia. Deja fuera BTC, ETH, SOL, BNB, XRP, monedas estables, acciones y metales.
+
+**Cómo aprende y se corrige.** Antes de cada orden calcula, para compras y ventas por separado, la probabilidad de ganar y la ganancia media tras comisiones, con lo ocurrido en las últimas semanas (cada día pesa menos que el anterior, con vida media de 14 días). Opera un lado solo si gana más del 50% de las veces **y** su media tras comisiones es positiva con suficiente confianza. Si la realidad contradice la predicción, ese lado pasa a "solo observa": sigue registrando qué habría pasado y vuelve a operar cuando los números lo justifican. `/mechas` muestra la predicción frente a la realidad. Al principio manda el backtest, que cuenta como 10 operaciones.
+
+**Cuenta.** Cada orden usa el 15% del saldo (mínimo 5 USD) y el aprendizaje la reduce cuando duda. Como máximo hay 4 posiciones a la vez, y se reserva margen con apalancamiento 10 para las órdenes en espera. Las comisiones son las de futuros: 0.02% al poner la orden y 0.05% al ejecutar a mercado, más 0.1% de deslizamiento en los stops.
+
+**Lo que midió el estudio** (velas de 1 minuto de futuros de junio a septiembre de 2026, 94 altcoins):
+
+| Hallazgo | Resultado |
+| --- | --- |
+| Rejilla clásica (comprar y vender a escalones fijos, hacia los dos lados) | Pierde tras comisiones o queda en cero, y cambia de signo entre periodos |
+| Órdenes cerca del precio (1.5 a 2 veces la volatilidad) | Ganan el 60–79% de las veces pero **pierden** dinero: los aciertos son pequeños y los fallos grandes. Ganar más del 50% no basta |
+| Compras en mecha a 4 veces la volatilidad | +0.66% / +0.48% por operación (jun-jul / ago-sep) en las monedas del estudio. Entradas al azar con las mismas salidas: −0.17% / −0.14% |
+| La misma regla en 14 monedas que no estaban en el estudio | 0% por operación: el primer resultado dependía de qué monedas se eligieron |
+| Elegir cada mes las 12 más volátiles del mes anterior (sin mirar al futuro) | Compras +0.35% / +0.80% / +0.91% (julio / agosto / septiembre), ventas en corto +0.56% / +0.42% / +0.18%, con las grandes tranquilas |
+| Elegir las monedas donde la estrategia ganó más el mes anterior | No se mantiene (−0.22% en septiembre) |
+| Mechas mientras BTC cae más de 0.3% en ese minuto | −1.71% por operación en ago-sep: son cascadas, no mechas |
+| Cuenta de 50 USD, jul-sep, orden del 20%, compras y ventas | 81.85 USD (+64%), caída máxima −11%. Solo compras: 68.34 USD (+37%), caída −6.5% |
+| Esta versión del bot (`npm run mechas`), septiembre con las monedas elegidas para ese mes | Compras: 68 operaciones, 71% ganadoras, +0.91%. Ventas: 38 operaciones, +0.67%; al final del mes el bot las pasó a "solo observa" porque se habían vuelto negativas. Cuenta: 56.79 USD (+13.6%), caída −4.2% |
+
+Ojo: elegí la distancia, el objetivo y el stop viendo esos mismos meses, así que el resultado real probablemente será menor. Por eso el bot mide cada operación y se corrige solo. Las mechas son pocas: una o dos al día por moneda en las semanas agitadas, y cero en las tranquilas.
+
+Probarlo con datos recientes: `node dist/index.js mechas --config config.reto50.json --dias 14`. Con `--monedas BEAT,TUT` usa esas monedas y con `--hasta 2026-09-30` termina en esa fecha.
+
+**Datos móviles.** El bot consulta 15 velas por minuto (12 monedas y las 3 grandes): unos 30 MB al día más.
 
 ## Futuros de Binance
 

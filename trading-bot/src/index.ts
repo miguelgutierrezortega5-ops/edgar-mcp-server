@@ -16,6 +16,11 @@ import { diagnose } from "./diagnose.js";
 import { assess, collectOutcomes, describeArm, loadAdaptive, saveAdaptive, type AdaptiveState } from "./adaptive.js";
 import { hurst, regimeName } from "./quant.js";
 import { FuturesSource, openInterestChange, type FuturesPoint } from "./data/futures.js";
+import { FuturesMinutes } from "./data/futures1m.js";
+import { backtestMechas } from "./mechas/backtest.js";
+import { MechasBot } from "./mechas/bot.js";
+import { calibration } from "./mechas/learn.js";
+import { selectCoins } from "./mechas/universe.js";
 import { join } from "node:path";
 import { buildBrokers, buildSources } from "./setup.js";
 import { paperName, Store } from "./store.js";
@@ -45,6 +50,10 @@ Comandos:
   verificar                Comprueba que ninguna estrategia mira al futuro (sesgo de anticipación)
   run (o bot)              Arranca el bot: vigila los mercados, opera y vuelve a aprender cada 24 h
       --once               Hace una sola pasada y termina (útil con cron)
+  mechas                   Reto 2 (cazador de mechas): elige las altcoins y lo prueba con velas de 1 minuto
+      --dias N             Días de historia del archivo de Binance (por defecto 7)
+      --monedas A,B,C      Esas monedas en vez de elegirlas (p. ej. BEAT,TUT)
+      --hasta AAAA-MM-DD   Último día de la prueba (por defecto ayer)
   status                   Saldo, posiciones abiertas, últimas operaciones y límites de riesgo
       --reanudar           Reactiva el trading tras una parada por drawdown
 
@@ -353,6 +362,7 @@ function report(config: Config, r: PortfolioResult, type: "crypto" | "forex", li
 }
 
 async function status(config: Config, markets: Market[], resume: boolean): Promise<void> {
+  if (config.mechas.enabled && existsSync(join(config.dataDir, "mechas", "estado.json"))) console.log(`${mechasBot(config, async () => {}).summary()}\n`);
   const store = new Store(config.dataDir);
   if (!existsSync(store.statePath)) {
     console.log(`Todavía no hay estado guardado en ${store.statePath}: el bot no ha arrancado aún.`);
@@ -448,6 +458,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const { sources: src, fx } = buildSources(config, markets);
   const brokers = buildBrokers(config, markets, state);
   const notify = telegramNotifier(config.telegram.enabled, log);
+  const mechas = config.mechas.enabled ? mechasBot(config, notify) : undefined;
   const learning = config.learning;
   const relearn = async () => {
     const last = loadLearning(config.dataDir);
@@ -483,6 +494,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
       mercados: bot.markets.map((m) => ({ id: m.id, estrategia: m.strategyName, parametros: m.strategy, pausa: m.paused ?? false })),
       aprendizaje: loadLearning(config.dataDir),
       adaptativo: adaptiveState,
+      reto2: mechas?.report(),
       registro: logTail,
     };
     const ok = await reporter(`informe-${body.generado.slice(0, 16).replace(":", "")}.json`, JSON.stringify(body, null, 1), caption(`📊 Informe para Claude (${describeVersion(version)})\n${body.estado}`));
@@ -532,6 +544,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const controller = new AbortController();
   // /actualizar: install the new commits; under the supervisor, stop so it starts the new version.
   const onCommand = async (c: Command): Promise<string | undefined> => {
+    if (c.name === "mechas") return mechas ? mechas.summary() : "El reto 2 (cazador de mechas) está apagado: mechas.enabled en la configuración.";
     if (c.name === "informe") return (await sendReport()) ? "📌 Informe publicado y fijado para Claude." : "❌ No se pudo publicar el informe (revisa el registro).";
     if (c.name !== "actualizar") return undefined;
     await notify("⏳ Buscando mejoras en GitHub… (instalarlas tarda un par de minutos)");
@@ -555,10 +568,12 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
     const mode = b.realMoney ? "DINERO REAL" : b.name.startsWith("paper") ? "simulado" : "cuenta de pruebas";
     log(`  ${m.id.padEnd(14)} → ${b.name} (${mode}), ${strategyOf(m).name}${m.allowShort ? ", largos y cortos" : ", solo largos"}${m.paused ? " — en pausa" : ""}`);
   }
+  if (mechas) log(`Reto 2 (cazador de mechas): cuenta simulada de ${fmt.money(mechas.state.balance, "USD")}, velas de 1 minuto, ${config.mechas.shorts ? "compras y ventas en corto" : "solo compras"}`);
   if (once) {
     await beforeTick();
     await bot.init();
     await bot.tick();
+    await mechas?.tick();
     return;
   }
   const stop = () => {
@@ -568,7 +583,43 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   await notify(`🤖 Bot iniciado (${describeVersion(await currentVersion(process.cwd()))}): ${markets.map((m) => m.id).join(", ")}`);
-  await bot.run(controller.signal);
+  await Promise.all([bot.run(controller.signal), mechas?.run(controller.signal)]);
+}
+
+const mechasBot = (config: Config, notify: (text: string) => Promise<void>) =>
+  new MechasBot({ config: config.mechas, source: new FuturesMinutes(join(config.dataDir, "velas1m"), log), notify, log, dir: join(config.dataDir, "mechas") });
+
+async function runMechas(config: Config, days: number, manual?: string, until?: string): Promise<void> {
+  const src = new FuturesMinutes(join(config.dataDir, "velas1m"), log);
+  let coins;
+  if (manual) coins = manual.split(",").map((s) => ({ symbol: `${s.trim().toUpperCase().replace(/USDT$/, "")}USDT`, range: NaN, tick: 0 }));
+  else {
+    console.log("Eligiendo las altcoins más volátiles de 30 días…");
+    coins = await selectCoins(src, config.mechas, log);
+    if (!src.usingFutures) console.log("(Binance futuros no responde desde aquí: la elección usa el mercado spot)");
+    console.log(coins.map((c) => `${c.symbol.replace(/USDT$/, "")} ${(c.range * 100).toFixed(0)}%`).join(", "));
+  }
+  const end = until ? Date.parse(`${until}T00:00:00Z`) + 86_400_000 : NaN;
+  if (until && !Number.isFinite(end)) throw new Error("--hasta debe ser una fecha AAAA-MM-DD");
+  const to = Number.isFinite(end) ? end : Math.floor(Date.now() / 86_400_000) * 86_400_000; // the archive ends yesterday
+  const from = to - days * 86_400_000;
+  console.log(`\nProbando ${days} días (${fmt.time(from)} a ${fmt.time(to)} UTC) con las velas de 1 minuto del archivo de futuros:`);
+  const r = await backtestMechas(config.mechas, src, coins, from, to, log);
+  const s = r.bot.state;
+  const closed = s.closed;
+  const bySide = (side: string) => {
+    const t = closed.filter((x) => x.side === side);
+    const wins = t.filter((x) => x.pnl > 0).length;
+    return t.length ? `${t.length} operaciones, ${((wins / t.length) * 100).toFixed(0)}% ganadoras, media ${fmt.pct((t.reduce((a, x) => a + x.ret, 0) / t.length) * 100)}, ${fmt.money(t.reduce((a, x) => a + x.pnl, 0), "USD")}` : "sin operaciones";
+  };
+  console.log(`\nCompras en mecha: ${bySide("long")}`);
+  console.log(`Ventas en pico:   ${bySide("short")}`);
+  console.log(`Observadas sin operar (lado en pausa o sin margen): ${s.outcomes.filter((o) => o.virtual).length}`);
+  const cal = calibration(closed);
+  if (cal.n) console.log(`Predicción vs. realidad: esperaba ganar el ${(cal.predicted * 100).toFixed(0)}%, ganó el ${(cal.realized * 100).toFixed(0)}%`);
+  console.log(`\nCuenta: ${fmt.money(s.startingBalance, "USD")} → ${fmt.money(s.balance, "USD")} (${fmt.pct((s.balance / s.startingBalance - 1) * 100)}), caída máxima ${fmt.pct(r.maxDrawdown * 100)}`);
+  console.log("\n" + r.bot.summary(to).split("\n").slice(3, 5).join("\n"));
+  console.log("\nOjo: las monedas son las de hoy; en días pasados eso favorece un poco el resultado. Un backtest no garantiza resultados futuros.");
 }
 
 async function main(): Promise<void> {
@@ -578,6 +629,8 @@ async function main(): Promise<void> {
       config: { type: "string" },
       once: { type: "boolean", default: false },
       dias: { type: "string" },
+      monedas: { type: "string" },
+      hasta: { type: "string" },
       mercado: { type: "string" },
       temporalidad: { type: "string" },
       operaciones: { type: "boolean", default: false },
@@ -621,6 +674,11 @@ async function main(): Promise<void> {
       return runLearning(config, markets);
     case "status":
       return status(config, markets, values.reanudar);
+    case "mechas": {
+      const days = Number(values.dias ?? 7);
+      if (!(days > 0)) throw new Error("--dias debe ser un número positivo");
+      return runMechas(config, days, values.monedas, values.hasta);
+    }
     case "run":
     case "bot":
       return run(config, manual, markets, path, values.once);
