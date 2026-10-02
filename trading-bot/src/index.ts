@@ -517,9 +517,11 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
         announced = pending.join("\n");
         const failed = await failedUpdate(process.cwd());
         if (autoUpdate && !failed) {
-          log(`Instalando solo ${pending.length} mejora(s) nuevas (actualización automática, cuentas simuladas)`);
-          await notify(`🆕 Instalo sola(s) ${pending.length} mejora(s) del bot (cuentas simuladas):\n${listUpdates(pending)}`);
+          const n = pending.length === 1 ? "1 mejora nueva" : `${pending.length} mejoras nuevas`;
+          log(`Instalando ${n} (actualización automática, cuentas simuladas)`);
+          await notify(`🆕 Instalando ${n} del bot (automático, solo cuentas simuladas):\n${listUpdates(pending)}`);
           await notify((await install()) ?? "");
+          if (controller.signal.aborted) return; // restarting with the new version: nothing else this round
         } else {
           log(`Hay ${pending.length} mejoras nuevas en GitHub (/actualizar en Telegram o bot actualizar en Termux)`);
           const why = failed ? "\nLa versión más nueva ya falló una vez al arrancar: espero una corrección antes de instalarla sola." : realMoney && config.updates.auto ? "\nNo las instalo sola porque hay dinero real en juego." : "";

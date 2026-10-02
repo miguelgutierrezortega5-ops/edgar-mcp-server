@@ -109,5 +109,6 @@
   "telegram": {
     "enabled": true
   },
-  "mechas": { "enabled": true }
+  "mechas": { "enabled": true },
+  "updates": { "auto": true, "checkHours": 1 }
 }
