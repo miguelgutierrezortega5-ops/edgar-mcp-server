@@ -7,7 +7,7 @@ import { loadConfig, makeMarket, type Config } from "./config.js";
 import { quoteRate, rateFunction } from "./data/source.js";
 import { Bot, historyStart } from "./engine.js";
 import * as fmt from "./fmt.js";
-import { applyUpdate, currentVersion, describeVersion, listUpdates, pendingUpdates, RESTART_CODE, UPDATE_CHECK_HOURS } from "./update.js";
+import { applyUpdate, confirmUpdate, currentVersion, describeVersion, failedUpdate, listUpdates, pendingUpdates, RESTART_CODE, takeRollbackNotice } from "./update.js";
 import { telegramCommands, telegramNotifier, telegramReporter, type Command } from "./notify.js";
 import { caption, logTail, markReported, remember, reportDue } from "./report.js";
 import { selectPairs } from "./pairs.js";
@@ -477,6 +477,9 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const auto = config.crypto.autoPairs;
   let updatesAt = 0;
   let announced = "";
+  const startedAt = Date.now();
+  const realMoney = Object.values(brokers).some((b) => b?.realMoney);
+  const autoUpdate = config.updates.auto && !realMoney && !!process.env.BOT_SUPERVISOR;
   const reporter = telegramReporter(config.telegram.enabled, log);
   const sendReport = async (): Promise<boolean> => {
     if (!reporter) return false;
@@ -505,13 +508,23 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const beforeTick = async () => {
     // From the second round on, so the report carries account values from a full round.
     if (!once && ++rounds > 1 && reportDue(config.dataDir, config.telegram.reportHours, Date.now())) await sendReport();
-    if (!once && Date.now() - updatesAt >= UPDATE_CHECK_HOURS * 3_600_000) {
+    // Ten minutes running: a freshly installed version works, so the supervisor no longer needs the way back.
+    if (!once && Date.now() - startedAt >= 10 * 60_000) confirmUpdate(process.cwd());
+    if (!once && Date.now() - updatesAt >= config.updates.checkHours * 3_600_000) {
       updatesAt = Date.now();
       const pending = await pendingUpdates(process.cwd());
       if (pending?.length && pending.join("\n") !== announced) {
         announced = pending.join("\n");
-        log(`Hay ${pending.length} mejoras nuevas en GitHub (/actualizar en Telegram o bot actualizar en Termux)`);
-        await notify(`🆕 Hay ${pending.length} mejora(s) nueva(s) del bot:\n${listUpdates(pending)}\nEscribe /actualizar para instalarlas.`);
+        const failed = await failedUpdate(process.cwd());
+        if (autoUpdate && !failed) {
+          log(`Instalando solo ${pending.length} mejora(s) nuevas (actualización automática, cuentas simuladas)`);
+          await notify(`🆕 Instalo sola(s) ${pending.length} mejora(s) del bot (cuentas simuladas):\n${listUpdates(pending)}`);
+          await notify((await install()) ?? "");
+        } else {
+          log(`Hay ${pending.length} mejoras nuevas en GitHub (/actualizar en Telegram o bot actualizar en Termux)`);
+          const why = failed ? "\nLa versión más nueva ya falló una vez al arrancar: espero una corrección antes de instalarla sola." : realMoney && config.updates.auto ? "\nNo las instalo sola porque hay dinero real en juego." : "";
+          await notify(`🆕 Hay ${pending.length} mejora(s) nueva(s) del bot:\n${listUpdates(pending)}${why}\nEscribe /actualizar para instalarlas.`);
+        }
       }
     }
     if (auto.enabled && Date.now() - pairsAt >= auto.refreshHours * 3_600_000) {
@@ -542,12 +555,8 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const fsLive = futuresSource(config);
   const futuresFor = fsLive ? (m: Market, since: number) => fsLive.metrics(futuresSymbol(m), since) : undefined;
   const controller = new AbortController();
-  // /actualizar: install the new commits; under the supervisor, stop so it starts the new version.
-  const onCommand = async (c: Command): Promise<string | undefined> => {
-    if (c.name === "mechas") return mechas ? mechas.summary() : "El reto 2 (cazador de mechas) está apagado: mechas.enabled en la configuración.";
-    if (c.name === "informe") return (await sendReport()) ? "📌 Informe publicado y fijado para Claude." : "❌ No se pudo publicar el informe (revisa el registro).";
-    if (c.name !== "actualizar") return undefined;
-    await notify("⏳ Buscando mejoras en GitHub… (instalarlas tarda un par de minutos)");
+  // Install the new commits; under the supervisor, stop so it starts the new version.
+  const install = async (): Promise<string | undefined> => {
     try {
       const done = await applyUpdate(process.cwd());
       if (!done.length) return `✅ Ya tienes la última ${describeVersion(await currentVersion(process.cwd()))}.`;
@@ -559,6 +568,13 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
     } catch (err) {
       return `❌ No se pudo actualizar: ${(err as Error).message}\nEn Termux puedes probar: bot actualizar`;
     }
+  };
+  const onCommand = async (c: Command): Promise<string | undefined> => {
+    if (c.name === "mechas") return mechas ? mechas.summary() : "El reto 2 (cazador de mechas) está apagado: mechas.enabled en la configuración.";
+    if (c.name === "informe") return (await sendReport()) ? "📌 Informe publicado y fijado para Claude." : "❌ No se pudo publicar el informe (revisa el registro).";
+    if (c.name !== "actualizar") return undefined;
+    await notify("⏳ Buscando mejoras en GitHub… (instalarlas tarda un par de minutos)");
+    return install();
   };
   const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log), onCommand, adaptive: () => adaptiveState, futures: futuresFor });
 
@@ -583,6 +599,11 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   await notify(`🤖 Bot iniciado (${describeVersion(await currentVersion(process.cwd()))}): ${markets.map((m) => m.id).join(", ")}`);
+  const rolledBack = takeRollbackNotice(process.cwd());
+  if (rolledBack) {
+    log(rolledBack);
+    await notify(`⚠️ ${rolledBack}`);
+  }
   await Promise.all([bot.run(controller.signal), mechas?.run(controller.signal)]);
 }
 
@@ -618,7 +639,14 @@ async function runMechas(config: Config, days: number, manual?: string, until?: 
   const cal = calibration(closed);
   if (cal.n) console.log(`Predicción vs. realidad: esperaba ganar el ${(cal.predicted * 100).toFixed(0)}%, ganó el ${(cal.realized * 100).toFixed(0)}%`);
   console.log(`\nCuenta: ${fmt.money(s.startingBalance, "USD")} → ${fmt.money(s.balance, "USD")} (${fmt.pct((s.balance / s.startingBalance - 1) * 100)}), caída máxima ${fmt.pct(r.maxDrawdown * 100)}`);
-  console.log("\n" + r.bot.summary(to).split("\n").slice(3, 5).join("\n"));
+  console.log("\n" + r.bot.summary(to).split("\n").filter((l) => /^(Compras en mecha|Ventas en pico):/.test(l)).join("\n"));
+  const sh = r.bot.shadowView(to);
+  console.log(`\nVariantes en la sombra (${sh.dias} días; suma diaria de rendimientos por operación, ventaja frente a la activa y su z):`);
+  for (const [side, v] of Object.entries(sh.lados)) {
+    if (side === "short" && !config.mechas.shorts) continue;
+    console.log(`  ${side === "long" ? "Compras" : "Ventas"} (activa ${v.activa}):`);
+    for (const x of v.variantes.slice(0, 6)) console.log(`    ${x.variante.padEnd(20)} ${fmt.pct(x.mediaDiaria * 100).padStart(8)}/día  ventaja ${fmt.pct(x.ventaja * 100).padStart(8)}  z ${x.z.toFixed(1)}`);
+  }
   console.log("\nOjo: las monedas son las de hoy; en días pasados eso favorece un poco el resultado. Un backtest no garantiza resultados futuros.");
 }
 

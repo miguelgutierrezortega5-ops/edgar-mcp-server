@@ -166,22 +166,42 @@ const configSchema = z
         makerFeePct: z.number().min(0).default(0.02),
         takerFeePct: z.number().min(0).default(0.05),
         slippagePct: z.number().min(0).default(0.1),
-        halfLifeDays: z.number().positive().default(14),
-        /** Backtest prior, worth `priorTrades` trades. */
+        halfLifeDays: z.number().positive().default(30),
+        /** Backtest prior (Mar–Sep 2026, both sides), worth `priorTrades` trades. */
         priorTrades: z.number().min(0).default(10),
-        priorMeanPct: z.number().default(0.4),
-        priorWinRate: z.number().min(0).max(1).default(0.65),
+        priorMeanPct: z.number().default(0.3),
+        priorWinRate: z.number().min(0).max(1).default(0.6),
         minTrades: z.number().min(0).default(20),
-        minProbability: z.number().min(0.5).max(0.99).default(0.6),
+        /** A side only observes when the probability that it makes money falls below this. */
+        minProbability: z.number().min(0.05).max(0.99).default(0.3),
         fullProbability: z.number().min(0.5).max(0.999).default(0.85),
+        /** Entry/exit variants measured in the shadow; the configured k/takeProfit/stop/maxMinutes is added if missing. */
+        variants: z
+          .array(z.object({ k: z.number().positive(), takeProfit: z.number().positive(), stop: z.number().positive(), maxMinutes: z.number().int().positive() }).strict())
+          .default([3, 4, 5].flatMap((k) => [1, 2].flatMap((stop) => [30, 60].map((maxMinutes) => ({ k, takeProfit: 1, stop, maxMinutes }))))),
+        /** Switch a side to a shadow variant that beat its own by z ≥ tuneZ over ≥ tuneMinDays days. */
+        autoTune: z.boolean().default(true),
+        tuneMinDays: z.number().min(1).default(60),
+        tuneHalfLifeDays: z.number().positive().default(30),
+        tuneZ: z.number().positive().default(3),
       })
       .strict()
+      .refine((m) => m.fullProbability > m.minProbability, "mechas.fullProbability debe ser mayor que minProbability")
       .default({}),
     telegram: z
       .object({
         enabled: z.boolean().default(true),
         /** Hours between reports for Claude (pinned JSON file in the chat); 0 = only on /informe. */
         reportHours: z.number().min(0).default(24),
+      })
+      .strict()
+      .default({}),
+    /** New versions from GitHub (the branch this clone tracks). */
+    updates: z
+      .object({
+        /** Install them without waiting for /actualizar, only while no account uses real money. */
+        auto: z.boolean().default(false),
+        checkHours: z.number().positive().default(6),
       })
       .strict()
       .default({}),

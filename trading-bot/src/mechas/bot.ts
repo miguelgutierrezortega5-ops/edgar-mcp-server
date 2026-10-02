@@ -5,6 +5,7 @@ import * as fmt from "../fmt.js";
 import type { Notifier } from "../notify.js";
 import { advance, distance, fill, isFilled, leadersAllow, orderPrice, sigma15, type Bar, type ClosedTrade, type MechasParams, type Order, type Position, type Side } from "./core.js";
 import { assessSide, calibration, type Outcome, type SideView } from "./learn.js";
+import { compare, dayOf, describeVariant, emptyShadow, shadowMinute, trimShadow, tune, variantKey, type ShadowState, type TuneConfig, type Variant } from "./shadow.js";
 import { selectCoins, type Pick } from "./universe.js";
 
 // Challenge 2 as a running bot: its own simulated account, minute by minute. The same steps serve the
@@ -44,6 +45,11 @@ export interface MechasConfig {
   minTrades: number;
   minProbability: number;
   fullProbability: number;
+  variants: Variant[];
+  autoTune: boolean;
+  tuneMinDays: number;
+  tuneHalfLifeDays: number;
+  tuneZ: number;
 }
 
 export interface MechasState {
@@ -61,6 +67,8 @@ export interface MechasState {
   closed: ClosedTrade[];
   /** Real and virtual results, for learning. */
   outcomes: Outcome[];
+  /** Entry/exit variants followed in the shadow (absent in states saved before they existed). */
+  shadow?: ShadowState;
 }
 
 const MINUTE = 60_000;
@@ -111,10 +119,27 @@ export class MechasBot {
   state: MechasState;
   private readonly bars = new Map<string, Bar[]>();
   private readonly p: MechasParams;
+  /** Shadow variants by key; the configured one first. */
+  private readonly variants: Map<string, Variant>;
+  private readonly baseKey: string;
 
   constructor(private readonly d: MechasDeps) {
     this.p = mechasParams(d.config);
+    const base: Variant = { k: d.config.k, takeProfit: d.config.takeProfit, stop: d.config.stop, maxMinutes: d.config.maxMinutes };
+    this.baseKey = variantKey(base);
+    this.variants = new Map([base, ...d.config.variants].map((v) => [variantKey(v), v]));
     this.state = this.load();
+  }
+
+  private get shadow(): ShadowState {
+    const s = (this.state.shadow ??= emptyShadow(this.baseKey, dayOf(this.now)));
+    for (const side of ["long", "short"] as Side[]) if (!this.variants.has(s.active[side])) s.active[side] = this.baseKey;
+    return s;
+  }
+
+  /** Strategy parameters of a side: its active variant. */
+  private paramsFor(side: Side): MechasParams {
+    return { ...this.p, ...this.variants.get(this.shadow.active[side]) };
   }
 
   private get now(): number {
@@ -216,7 +241,7 @@ export class MechasBot {
     for (const pos of [...this.state.positions]) {
       const bar = this.barAt(pos.symbol, t);
       if (!bar || bar.time <= pos.openedAt) continue;
-      const done = advance(pos, bar, p);
+      const done = advance(pos, bar, this.paramsFor(pos.side));
       if (done) this.settle(pos, done);
     }
     const resting = this.state.pending.filter((o) => o.forTime === t);
@@ -229,12 +254,53 @@ export class MechasBot {
       if (hits.length !== 1 || this.state.positions.some((x) => x.symbol === symbol)) continue;
       const order = { ...hits[0] };
       if (!order.virtual && this.state.positions.filter((x) => !x.virtual).length >= this.d.config.maxPositions) order.virtual = true;
-      const { position, closed } = fill(order, bar, p);
+      const { position, closed } = fill(order, bar, this.paramsFor(order.side));
       this.state.positions.push(position);
       if (closed) this.settle(position, closed);
     }
+    shadowMinute(this.shadow, [...this.variants.values()], this.state.coins, t, this.market, p, this.d.config.shorts);
+    if (dayOf(t) > this.shadow.checkedDay) this.retune(dayOf(t));
     if (live) this.placeOrders(t);
     this.state.lastMinute = t;
+  }
+
+  private readonly market = {
+    bar: (symbol: string, t: number) => this.barAt(symbol, t),
+    sigma: (symbol: string, t: number) => sigma15(this.closesUpTo(symbol, t, 241)),
+    leaderMoves: (t: number) => this.leaderMoves(t),
+  };
+
+  /** Once a day: move a side to a shadow variant that clearly beat its own. */
+  private retune(today: number): void {
+    const s = this.shadow;
+    s.checkedDay = today;
+    trimShadow(s, today);
+    const c: TuneConfig = this.d.config;
+    for (const side of ["long", "short"] as Side[]) {
+      if (side === "short" && !this.d.config.shorts) continue;
+      const best = tune(s, side, [...this.variants.keys()], today, c);
+      if (!best) continue;
+      const days = today - s.since;
+      s.switches.push({ time: today * DAY, side, from: s.active[side], to: best.key, z: best.z, days });
+      s.active[side] = best.key;
+      const text = `🔧 Reto 2 ajusta sus ${side === "long" ? "compras en mecha" : "ventas en pico"}: ${describeVariant(this.variants.get(best.key)!)}. En ${days} días en la sombra ganó ${fmt.pct(best.edge * 100)} por día más que la anterior (z ${best.z.toFixed(1)}, exige ${c.tuneZ}).`;
+      this.d.log(text);
+      void this.d.notify(text);
+    }
+  }
+
+  /** The shadow variants of each side, best first, against the active one. */
+  shadowView(now = this.now): { dias: number; lados: Record<string, { activa: string; variantes: { variante: string; mediaDiaria: number; ventaja: number; z: number }[] }>; cambios: ShadowState["switches"] } {
+    const s = this.shadow;
+    const today = dayOf(now);
+    const lados: Record<string, { activa: string; variantes: { variante: string; mediaDiaria: number; ventaja: number; z: number }[] }> = {};
+    let dias = 0;
+    for (const side of ["long", "short"] as Side[]) {
+      const c = compare(s, side, [...this.variants.keys()], today, this.d.config.tuneHalfLifeDays);
+      dias = c.days;
+      lados[side] = { activa: s.active[side], variantes: c.rows.map((r) => ({ variante: r.key, mediaDiaria: r.mean, ventaja: r.edge, z: r.z })) };
+    }
+    return { dias, lados, cambios: s.switches };
   }
 
   private placeOrders(t: number): void {
@@ -249,9 +315,9 @@ export class MechasBot {
       const ref = this.barAt(coin.symbol, t)?.close;
       const sigma = sigma15(this.closesUpTo(coin.symbol, t, 241));
       if (!ref || !Number.isFinite(sigma)) continue;
-      const dist = distance(sigma, this.p);
       for (const side of sides) {
         if (!leadersAllow(side, moves, this.p)) continue;
+        const dist = distance(sigma, this.paramsFor(side));
         const v = views[side];
         const base = Math.max(c.minOrderUsd, (equity * c.orderPct) / 100);
         const notional = Math.max(c.minOrderUsd, base * v.scale);
@@ -336,6 +402,16 @@ export class MechasBot {
     }
     const cal = calibration(s.closed.slice(-100));
     if (cal.n) lines.push(`Predicción vs. realidad (últimas ${cal.n}): esperaba ganar el ${(cal.predicted * 100).toFixed(0)}%, ganó el ${(cal.realized * 100).toFixed(0)}%`);
+    const sh = this.shadowView(now);
+    const c = this.d.config;
+    if (!sh.dias) lines.push(`En la sombra: midiendo ${this.variants.size} variantes de entrada y salida desde hoy (cambia sola con ventaja z ≥ ${c.tuneZ} tras ${c.tuneMinDays} días)`);
+    else
+      for (const [side, v] of Object.entries(sh.lados)) {
+        if (side === "short" && !c.shorts) continue;
+        const best = v.variantes.find((x) => x.variante !== v.activa);
+        const name = side === "long" ? "compras" : "ventas";
+        lines.push(`En la sombra (${sh.dias} de ${c.tuneMinDays} días): ${name} con ${v.activa}${best ? `; mejor alternativa ${best.variante}, ${fmt.pct(best.ventaja * 100)}/día, z ${best.z.toFixed(1)} (cambia con ${c.tuneZ})` : ""}`);
+      }
     lines.push(`Monedas: ${s.coins.map((x) => short(x.symbol)).join(", ") || "(eligiendo)"}`);
     return lines.join("\n");
   }
@@ -352,6 +428,7 @@ export class MechasBot {
       lados: this.views(now),
       calibracion: calibration(s.closed.slice(-100)),
       observadas: s.outcomes.filter((o) => o.virtual).length,
+      sombra: this.shadowView(now),
     };
   }
 }

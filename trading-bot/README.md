@@ -146,7 +146,7 @@ Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env`, el bot avisa de cada op
 | `/cerrar BTC` o `/cerrar todo` | Cierra a mercado |
 | `/actualizar` | Instala las mejoras nuevas del bot y lo reinicia con ellas |
 | `/informe` | Publica ya el informe detallado para Claude (ver abajo) |
-| `/mechas` | Reto 2: saldo, posiciones, y qué tan bien acierta (predicción frente a realidad) |
+| `/mechas` | Reto 2: saldo, posiciones, qué tan bien acierta (predicción frente a realidad) y cómo van las variantes en la sombra |
 
 Los mensajes enviados mientras el bot estaba apagado se descartan, no se ejecutan.
 
@@ -165,7 +165,11 @@ No contiene claves ni tokens. Con el token del bot, Claude lee el último inform
 
 ### Mejoras nuevas
 
-Cada mejora del bot (estrategias, aprendizajes, correcciones) se publica en la rama de GitHub de la que se instaló. Cada 6 horas el bot mira si hay mejoras nuevas y, si las hay, te avisa por Telegram con la lista. Escribe `/actualizar` para instalarlas: el bot las descarga, se recompila (un par de minutos) y se reinicia solo con la versión nueva. El saldo simulado, las posiciones y lo que el bot aprendió se conservan, porque están en `data/`, que las actualizaciones no tocan. Nada se instala sin tu `/actualizar`.
+Cada mejora del bot (estrategias, aprendizajes, correcciones) se publica en la rama de GitHub de la que se instaló. Cada 6 horas el bot mira si hay mejoras nuevas y, si las hay, te avisa por Telegram con la lista. Escribe `/actualizar` para instalarlas: el bot las descarga, se recompila (un par de minutos) y se reinicia solo con la versión nueva. El saldo simulado, las posiciones y lo que el bot aprendió se conservan, porque están en `data/`, que las actualizaciones no tocan. Nada se instala sin tu `/actualizar`, salvo que actives la instalación automática (abajo).
+
+Si una versión nueva no compila, el bot la deshace en el acto y sigue con la anterior. Si compila pero se cae dos veces nada más arrancar, el supervisor vuelve a la anterior y te avisa por Telegram.
+
+**Instalación automática (apagada por defecto).** Con `"updates": { "auto": true, "checkHours": 1 }` en la configuración, el bot instala solo las mejoras nuevas cada hora y te avisa de qué instaló. Solo lo hace mientras ninguna cuenta use dinero real; con dinero real, siempre espera tu `/actualizar`. Una versión que ya falló al arrancar no se reinstala sola hasta que llegue una más nueva.
 
 El reinicio automático lo hace `scripts/android/supervisor.sh`, que arranca `bot iniciar`. Si el bot se cae, el supervisor lo vuelve a arrancar al minuto, y lo deja detenido tras 5 caídas seguidas. Sin supervisor, por ejemplo con `npm run bot`, `/actualizar` instala la versión nueva y pide reiniciar a mano. Desde Termux también se puede con `bot actualizar`.
 
@@ -229,7 +233,13 @@ Las órdenes quedan esperando, así que la entrada ocurre en el segundo exacto d
 
 **Qué monedas.** Cada semana elige las 12 altcoins más volátiles de los últimos 30 días entre los futuros con 20 M a 1.5 B USD de volumen diario y al menos 60 días de historia. Deja fuera BTC, ETH, SOL, BNB, XRP, monedas estables, acciones y metales.
 
-**Cómo aprende y se corrige.** Antes de cada orden calcula, para compras y ventas por separado, la probabilidad de ganar y la ganancia media tras comisiones, con lo ocurrido en las últimas semanas (cada día pesa menos que el anterior, con vida media de 14 días). Opera un lado solo si gana más del 50% de las veces **y** su media tras comisiones es positiva con suficiente confianza. Si la realidad contradice la predicción, ese lado pasa a "solo observa": sigue registrando qué habría pasado y vuelve a operar cuando los números lo justifican. `/mechas` muestra la predicción frente a la realidad. Al principio manda el backtest, que cuenta como 10 operaciones.
+**Cómo aprende y se corrige.** Antes de cada orden calcula, para compras y ventas por separado, la probabilidad de ganar y la ganancia media tras comisiones, con lo ocurrido en las últimas semanas (cada día pesa menos que el anterior, con vida media de 30 días). Opera un lado solo si gana más del 50% de las veces, y lo pasa a "solo observa" cuando hay evidencia de que pierde dinero: probabilidad de que su media tras comisiones sea positiva por debajo del 30%. Entre medias opera con un tamaño menor cuanto más duda. En "solo observa" sigue registrando qué habría pasado y vuelve a operar cuando los números lo justifican. `/mechas` muestra la predicción frente a la realidad. Al principio manda el backtest, que cuenta como 10 operaciones (media +0.3%, 60% ganadoras: lo medido de marzo a septiembre).
+
+Antes pausaba con la simple duda (confianza menor al 60%). En las pruebas, eso pausó las compras justo antes de sus mejores rachas en los dos periodos. La regla actual sigue pausando los cortos que perdían en marzo-mayo.
+
+**Variantes en la sombra.** Además de la regla con la que opera (orden a 4σ, objetivo 1×, stop 1×, 30 minutos), el bot sigue cada minuto, sin dinero, 12 variantes en las mismas monedas: órdenes a 3σ, 4σ o 5σ, stop de 1× o 2× y límite de 30 o 60 minutos. Anota cuánto habría ganado cada una por día. Si tras al menos 60 días una variante supera claramente a la activa (ventaja con z ≥ 3, unas tres veces su margen de error) y gana dinero, el bot cambia ese lado a ella y te avisa por Telegram (🔧). `/mechas` y el informe diario muestran cómo va cada una.
+
+La exigencia es alta a propósito. En la prueba, elegir la variante que mejor iba tras unas semanas acertaba tan a menudo como fallaba, porque la que gana un mes casi no anticipa la del siguiente (correlación 0.13 a 0.39). Con esta regla estricta no hubo ningún cambio en 6 meses de prueba: no estropea nada y solo actúa ante un cambio duradero del mercado.
 
 **Cuenta.** Cada orden usa el 15% del saldo (mínimo 5 USD) y el aprendizaje la reduce cuando duda. Como máximo hay 4 posiciones a la vez, y se reserva margen con apalancamiento 10 para las órdenes en espera. Las comisiones son las de futuros: 0.02% al poner la orden y 0.05% al ejecutar a mercado, más 0.1% de deslizamiento en los stops.
 
@@ -246,10 +256,13 @@ Las órdenes quedan esperando, así que la entrada ocurre en el segundo exacto d
 | Mechas mientras BTC cae más de 0.3% en ese minuto | −1.71% por operación en ago-sep: son cascadas, no mechas |
 | Cuenta de 50 USD, jul-sep, orden del 20%, compras y ventas | 81.85 USD (+64%), caída máxima −11%. Solo compras: 68.34 USD (+37%), caída −6.5% |
 | Esta versión del bot (`npm run mechas`), septiembre con las monedas elegidas para ese mes | Compras: 68 operaciones, 71% ganadoras, +0.91%. Ventas: 38 operaciones, +0.67%; al final del mes el bot las pasó a "solo observa" porque se habían vuelto negativas. Cuenta: 56.79 USD (+13.6%), caída −4.2% |
+| **Meses que no se usaron para elegir nada (marzo a mayo de 2026)**, el bot completo, monedas elegidas cada mes con el mes anterior | Mucho más flojo. Compras +0.12% por operación (60% ganadoras); ventas −0.01%, y el bot dejó en observación 110 ventas que habrían perdido −0.26% de media. Cuenta: 50.77 USD (+1.5% en 3 meses), caída −6.7%. Sin aprendizaje: 50.56 USD con caída −11.1% |
+| Ese mismo bot de julio a septiembre | 66.79 USD (+34%), caída −8.9%. Sin aprendizaje: 71.74 USD. Con la regla de pausa anterior: 61.33 USD |
+| Stop de 2× y 60 minutos (lo mejor de julio a septiembre entre 192 combinaciones) | En marzo a mayo fue **peor** que la regla actual (44.98 frente a 49.19 USD sin aprendizaje): era suerte de esos meses. No se usa |
 
-Ojo: elegí la distancia, el objetivo y el stop viendo esos mismos meses, así que el resultado real probablemente será menor. Por eso el bot mide cada operación y se corrige solo. Las mechas son pocas: una o dos al día por moneda en las semanas agitadas, y cero en las tranquilas.
+Ojo: elegí la distancia, el objetivo y el stop viendo julio a septiembre, y en marzo a mayo rindió mucho menos. Lo honesto es esperar algo entre los dos: casi plano en meses tranquilos y bueno cuando hay mechas. Por eso el bot mide cada operación y se corrige solo. Las mechas son pocas: una o dos al día por moneda en las semanas agitadas, y cero en las tranquilas.
 
-Probarlo con datos recientes: `node dist/index.js mechas --config config.reto50.json --dias 14`. Con `--monedas BEAT,TUT` usa esas monedas y con `--hasta 2026-09-30` termina en esa fecha.
+Probarlo con datos recientes: `node dist/index.js mechas --config config.reto50.json --dias 14`. Con `--monedas BEAT,TUT` usa esas monedas y con `--hasta 2026-09-30` termina en esa fecha. Al final muestra también cómo habrían ido las variantes en la sombra en esos días (con pocos días la z sale alta por azar; por eso el bot exige 60).
 
 **Datos móviles.** El bot consulta 15 velas por minuto (12 monedas y las 3 grandes): unos 30 MB al día más.
 

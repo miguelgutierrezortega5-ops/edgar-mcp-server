@@ -5,8 +5,11 @@ import type { Side } from "./core.js";
 // real or not (side paused, no room left): in markets the counterfactual is public, so a paused side keeps
 // being measured and can come back. Recent trades weigh more (half-life). The backtest enters as a prior
 // worth a few trades, so early results neither switch a side off nor on by themselves.
-// A side trades only while its estimated win probability is above 50% AND its mean return after costs is
-// positive with enough confidence; the size grows with that confidence.
+// A side trades only while its estimated win probability is above 50%, and pauses once the evidence says it
+// loses money (probability of a positive mean below `minProbability`); the size grows with that probability.
+// Measured Mar–Sep 2026 (README): pausing on mere doubt (below 60%) paused wick buys right before their best
+// stretches in both periods; pausing on evidence of losses (below 30%, 30-day half-life) still paused the
+// losing shorts of March–May and halved that period's drawdown against never pausing.
 
 export interface Outcome {
   side: Side;
@@ -59,9 +62,11 @@ export function assessSide(outcomes: Outcome[], side: Side, now: number, c: Lear
   const pWin = (wins + c.priorWinRate * c.priorTrades) / (w + c.priorTrades);
   const base = { side, n: ev.n, pWin, mean: ev.mean, pPositive: ev.pPositive };
   if (pWin <= 0.5) return { ...base, scale: 0, why: `gana el ${(pWin * 100).toFixed(0)}% (necesita más del 50%)` };
-  if (ev.mean <= 0) return { ...base, scale: 0, why: `media ${(ev.mean * 100).toFixed(2)}% tras comisiones` };
-  if (ev.n < c.minTrades) return { ...base, scale: 1, why: `pocas operaciones aún (${ev.n.toFixed(0)}): manda el backtest` };
-  if (ev.pPositive < c.minProbability) return { ...base, scale: 0, why: `confianza ${(ev.pPositive * 100).toFixed(0)}% de que gane (necesita ${(c.minProbability * 100).toFixed(0)}%)` };
+  if (ev.n < c.minTrades) {
+    if (ev.mean <= 0) return { ...base, scale: 0, why: `media ${(ev.mean * 100).toFixed(2)}% tras comisiones` };
+    return { ...base, scale: 1, why: `pocas operaciones aún (${ev.n.toFixed(0)}): manda el backtest` };
+  }
+  if (ev.pPositive < c.minProbability) return { ...base, scale: 0, why: `probabilidad de ganar dinero ${(ev.pPositive * 100).toFixed(0)}%: pausa por debajo de ${(c.minProbability * 100).toFixed(0)}%` };
   const scale = ev.pPositive >= c.fullProbability ? 1 : 0.25 + (0.75 * (ev.pPositive - c.minProbability)) / (c.fullProbability - c.minProbability);
   return { ...base, scale, why: `confianza ${(ev.pPositive * 100).toFixed(0)}%` };
 }

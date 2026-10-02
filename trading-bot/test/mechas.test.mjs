@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { MechasBot, mechasParams } from "../dist/mechas/bot.js";
 import { advance, fill, isFilled, leadersAllow, orderPrice, sigma15 } from "../dist/mechas/core.js";
 import { assessSide, calibration } from "../dist/mechas/learn.js";
+import { compare, dayOf, emptyShadow, trimShadow, tune } from "../dist/mechas/shadow.js";
 import { eligible, medianRange, selectCoins } from "../dist/mechas/universe.js";
 import { loadConfig } from "../dist/config.js";
 
@@ -184,4 +185,77 @@ test("the state survives a restart, and missed minutes only close positions, nev
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("with the default rule a side pauses on evidence of losses, not on mere doubt", () => {
+  const c = { ...learnCfg, halfLifeDays: DEFAULTS.halfLifeDays, minProbability: DEFAULTS.minProbability, priorMean: DEFAULTS.priorMeanPct / 100, priorWinRate: DEFAULTS.priorWinRate };
+  const now = T0 + 40 * 3_600_000;
+  // A flat stretch (wins 2 of 3, mean about zero): doubt, so it keeps trading but smaller.
+  const flat = assessSide(outcomes("long", 40, (i) => (i % 3 ? 0.006 : -0.0125)), "long", now, c);
+  assert.ok(flat.scale > 0 && flat.scale < 1, flat.why);
+  // Clearly losing while still winning more than half: paused.
+  const losing = assessSide(outcomes("short", 40, (i) => (i % 3 ? 0.002 : -0.02)), "short", now, c);
+  assert.equal(losing.scale, 0);
+  assert.match(losing.why, /pausa por debajo de 30%/);
+});
+
+test("every variant is followed in the shadow, and the active one matches the real trade exactly", () => {
+  const bot = newBot();
+  bot.setCoins([{ symbol: "XUSDT", range: 0.2, tick: 0 }], T0);
+  // Minute 270: a 3.5% wick, deep enough for orders at 3σ and 4σ but not at 5σ.
+  const mkt = market((i) => (i === 270 ? bar(T0 + i * MIN, 100, 100.1, 96.5, 97.5) : i > 270 ? bar(T0 + i * MIN, 99.5, 100.6, 99.4, 100.5) : null));
+  run(bot, mkt, 340);
+  const day = String(dayOf(T0));
+  const daily = bot.state.shadow.daily.long;
+  assert.equal(bot.state.closed.length, 1);
+  assert.ok(Math.abs(daily["k4 obj1 stop1 30m"][day] - bot.state.closed[0].ret) < 1e-12);
+  assert.ok(daily["k3 obj1 stop2 60m"][day] > 0);
+  assert.equal(Object.keys(daily).filter((k) => k.startsWith("k5")).length, 0);
+  assert.match(bot.summary(T0 + 340 * MIN), /En la sombra: midiendo 12 variantes/);
+});
+
+/** A shadow with `days` complete days where `better` earned `edge` more per day than the active variant. */
+function shadowWith(days, better, edge, today) {
+  const s = emptyShadow("k4 obj1 stop1 30m", today - days);
+  for (let d = today - days; d < today; d++) {
+    const base = 0.01 * Math.sin(d); // the market's daily swing, shared by every variant
+    s.daily.long["k4 obj1 stop1 30m"] = { ...s.daily.long["k4 obj1 stop1 30m"], [d]: base };
+    s.daily.long[better] = { ...s.daily.long[better], [d]: base + edge + 0.002 * Math.cos(3 * d) };
+    s.daily.long["k3 obj1 stop1 30m"] = { ...s.daily.long["k3 obj1 stop1 30m"], [d]: base + 0.03 * Math.sign(Math.sin(5 * d)) }; // lucky some days, not better
+  }
+  s.checkedDay = today - 1;
+  return s;
+}
+
+test("a side moves to another variant only after it clearly beat the active one for long enough", () => {
+  const today = dayOf(T0);
+  const keys = ["k4 obj1 stop1 30m", "k5 obj1 stop2 60m", "k3 obj1 stop1 30m"];
+  const c = { autoTune: true, tuneMinDays: 60, tuneHalfLifeDays: 30, tuneZ: 3 };
+  assert.equal(tune(shadowWith(59, "k5 obj1 stop2 60m", 0.004, today), "long", keys, today, c), null); // too soon
+  assert.equal(tune(shadowWith(60, "k5 obj1 stop2 60m", 0.004, today), "long", keys, today, c).key, "k5 obj1 stop2 60m");
+  assert.equal(tune(shadowWith(60, "k5 obj1 stop2 60m", 0.004, today), "long", keys, today, { ...c, autoTune: false }), null);
+  assert.equal(tune(shadowWith(90, "k5 obj1 stop2 60m", 0.0003, today), "long", keys, today, c), null); // a small edge drowns in noise
+  const rows = compare(shadowWith(60, "k5 obj1 stop2 60m", 0.004, today), "long", keys, today, 30).rows;
+  assert.equal(rows.find((r) => r.key === "k3 obj1 stop1 30m").z < 3, true);
+  const old = shadowWith(200, "k5 obj1 stop2 60m", 0.004, today);
+  trimShadow(old, today);
+  assert.equal(old.since, today - 180);
+  assert.equal(Object.keys(old.daily.long["k5 obj1 stop2 60m"]).length, 180);
+});
+
+test("after a switch the bot tells the owner and the side's orders use the new distance", () => {
+  const sent = [];
+  const make = (shadow) => {
+    const bot = new MechasBot({ config: config({ shorts: false }), source: {}, notify: async (t) => void sent.push(t), log: () => {}, now: () => T0 });
+    bot.setCoins([{ symbol: "XUSDT", range: 0.2, tick: 0 }], T0);
+    if (shadow) bot.state.shadow = shadow;
+    run(bot, market(), 262);
+    return bot;
+  };
+  const before = make().state.pending[0].distance;
+  const bot = make(shadowWith(70, "k5 obj1 stop2 60m", 0.004, dayOf(T0)));
+  assert.equal(bot.state.shadow.active.long, "k5 obj1 stop2 60m");
+  assert.equal(bot.state.shadow.switches.length, 1);
+  assert.match(sent.join("\n"), /ajusta sus compras en mecha: orden a 5σ, objetivo 1×, stop 2×, máximo 60 min/);
+  assert.ok(Math.abs(bot.state.pending[0].distance / before - 5 / 4) < 1e-9);
 });
