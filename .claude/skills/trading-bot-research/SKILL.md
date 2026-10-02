@@ -52,3 +52,7 @@ Token-efficient workflow: put research scripts in the scratchpad, cache klines t
 - Stop-loss resting on Binance (STOP_LOSS_LIMIT / OCO) so positions stay protected with the bot off; needs testnet keys from a non-US connection.
 
 Update the findings above when a study changes them.
+
+## Live log (phone copy)
+
+- 2026-10-01 17:53 → 10-02 06:00 UTC: 0 trades, and a replay of the same rules gives 0 signals. BTC +1.1%, worst 30-min BTC drop −0.79%. Closest case: ALICE −10% in 30 min on ×5.8 volume at 01:33 UTC with BTC flat (−0.16%), so the BTC filter skipped it. Over the next 2 h ALICE went flat (+0.05%, low −1.6%) and kept sliding: the drop came after a +35% intraday pump. One case, not evidence, but it fits the event study (isolated drops do not bounce). Idea to test: split flushes by the move before them (unwinding a recent pump vs a drop from a stable base).
