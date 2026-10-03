@@ -229,6 +229,8 @@ Una segunda cuenta simulada de 50 USD, aparte del reto 1, que opera altcoins en 
 
 Las órdenes quedan esperando, así que la entrada ocurre en el segundo exacto de la mecha, aunque el bot revise una vez por minuto.
 
+Si el celular se duerme, se queda sin red o se reinicia, en esos minutos no hay órdenes; si va atrasado más de 15 segundos en un minuto, tampoco la pone, porque una orden real se habría perdido el principio de esa vela. `/mechas` dice cuántos minutos de hoy se quedaron sin órdenes y el informe diario los guarda por día, para distinguir "el mercado no dio mechas" de "el celular no estaba".
+
 **Vigilando a las grandes.** Si BTC, ETH o SOL cayeron más de 0.2% en los últimos 5 minutos, no pone compras, porque una mecha durante una caída de las grandes suele seguir bajando. Del mismo modo, si alguna subió más de 0.2%, no pone ventas en corto.
 
 **Qué monedas.** Cada semana elige las 12 altcoins más volátiles de los últimos 30 días entre los futuros con 20 M a 1.5 B USD de volumen diario y al menos 60 días de historia. Deja fuera BTC, ETH, SOL, BNB, XRP, monedas estables, acciones y metales.

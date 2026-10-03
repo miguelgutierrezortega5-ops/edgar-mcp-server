@@ -11,7 +11,8 @@ import { selectCoins, type Pick } from "./universe.js";
 // Challenge 2 as a running bot: its own simulated account, minute by minute. The same steps serve the
 // live bot and the backtest (`processMinute`), so both follow identical rules. While the bot is not
 // running (phone asleep) it places no orders, but open positions keep their target and stop, as they
-// would resting on the exchange: catching up, missed minutes are replayed for exits only.
+// would resting on the exchange: catching up, missed minutes are replayed for exits only. An order decided
+// late into its minute is skipped too: a real one would have missed the first part of that candle.
 
 export interface MechasConfig {
   enabled: boolean;
@@ -71,6 +72,8 @@ export interface MechasState {
   shadow?: ShadowState;
   /** When the first real trade was entered. */
   firstTradeAt?: number;
+  /** Per UTC day, minutes with orders placed and minutes without (asleep, late, offline or restarting). */
+  coverage?: Record<string, { live: number; missed: number }>;
 }
 
 const MINUTE = 60_000;
@@ -78,6 +81,9 @@ const DAY = 86_400_000;
 const KEEP_BARS = 400;
 const MAX_CLOSED = 300;
 const MAX_OUTCOMES = 4000;
+/** Orders decided later than this into their minute are not placed. */
+const LATE_MS = 15_000;
+const COVERAGE_DAYS = 14;
 
 export function mechasParams(c: MechasConfig): MechasParams {
   return {
@@ -372,20 +378,38 @@ export class MechasBot {
       }
     }
     const latest = Math.floor(now / MINUTE) * MINUTE - MINUTE;
-    if (latest <= this.state.lastMinute) return;
+    const prev = this.state.lastMinute;
+    if (latest <= prev) return;
     // A long gap: positions have expired; replay at most a day.
-    const from = Math.max(this.state.lastMinute + MINUTE, latest - DAY);
-    for (const symbol of this.symbols) {
-      const have = this.bars.get(symbol)?.at(-1)?.time;
-      const since = have && have >= latest - DAY ? have + MINUTE : Math.min(from, latest - 300 * MINUTE);
-      try {
-        this.addBars(symbol, await this.d.source.minutes(symbol, since, now));
-      } catch (err) {
-        this.d.log(`Reto 2: sin velas de ${symbol} (${(err as Error).message})`);
-      }
+    const from = Math.max(prev + MINUTE, latest - DAY);
+    // All at once: one slow answer on a phone's connection should not hold up the minute for the rest.
+    await Promise.all(
+      this.symbols.map(async (symbol) => {
+        const have = this.bars.get(symbol)?.at(-1)?.time;
+        const since = have && have >= latest - DAY ? have + MINUTE : Math.min(from, latest - 300 * MINUTE);
+        try {
+          this.addBars(symbol, await this.d.source.minutes(symbol, since, now));
+        } catch (err) {
+          this.d.log(`Reto 2: sin velas de ${symbol} (${(err as Error).message})`);
+        }
+      }),
+    );
+    const onTime = this.now - (latest + MINUTE) <= LATE_MS;
+    for (let t = from; t <= latest; t += MINUTE) {
+      const live = t === latest && onTime;
+      this.processMinute(t, live);
+      if (prev) this.count(t, live);
     }
-    for (let t = from; t <= latest; t += MINUTE) this.processMinute(t, t === latest);
     this.save();
+  }
+
+  private count(t: number, live: boolean): void {
+    const c = (this.state.coverage ??= {});
+    const day = new Date(t).toISOString().slice(0, 10);
+    const d = (c[day] ??= { live: 0, missed: 0 });
+    if (live) d.live++;
+    else d.missed++;
+    for (const k of Object.keys(c).sort().slice(0, -COVERAGE_DAYS)) delete c[k];
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -416,6 +440,8 @@ export class MechasBot {
     const day = new Date(now).toISOString().slice(0, 10);
     const today = s.closed.filter((t) => new Date(t.closedAt).toISOString().startsWith(day));
     lines.push(`Hoy: ${today.length} operaciones, ${today.filter((t) => t.ret > 0).length} ganadoras, ${fmt.money(today.reduce((a, t) => a + t.pnl, 0), ccy)}`);
+    const cov = s.coverage?.[day];
+    if (cov?.missed) lines.push(`Minutos sin órdenes hoy: ${cov.missed} de ${cov.live + cov.missed} (celular dormido, sin red, atrasado o reiniciando)`);
     for (const v of Object.values(this.views(now))) {
       if (v.side === "short" && !this.d.config.shorts) continue;
       lines.push(`${v.side === "long" ? "Compras en mecha" : "Ventas en pico"}: gana el ${(v.pWin * 100).toFixed(0)}% estimado, media ${fmt.pct(v.mean * 100)} → ${v.scale > 0 ? `tamaño ×${v.scale.toFixed(2)}` : "solo observa"} (${v.why})`);
@@ -449,6 +475,7 @@ export class MechasBot {
       calibracion: calibration(s.closed.slice(-100)),
       observadas: s.outcomes.filter((o) => o.virtual).length,
       sombra: this.shadowView(now),
+      minutosConOrdenes: s.coverage ?? {},
     };
   }
 }

@@ -187,6 +187,41 @@ test("the state survives a restart, and missed minutes only close positions, nev
   }
 });
 
+test("live minutes: coins are fetched at once, an order decided too late is skipped, minutes without orders are counted", async () => {
+  const mkt = market();
+  let now;
+  let inFlight = 0;
+  let most = 0;
+  const source = {
+    minutes: async (s, since, n) => {
+      most = Math.max(most, ++inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return Array.from({ length: 400 }, (_, i) => mkt.bar(s, i)).filter((b) => b.time >= since && b.time + MIN <= n);
+    },
+    coins: async () => [],
+    days: async () => [],
+  };
+  const bot = new MechasBot({ config: config({ shorts: false }), source, notify: async () => {}, log: () => {}, now: () => now });
+  bot.setCoins([{ symbol: "XUSDT", range: 0.2, tick: 0 }], T0);
+  now = T0 + 300 * MIN + 3_000;
+  await bot.tick();
+  assert.ok(most > 1, "the coins are requested in parallel");
+  assert.equal(bot.state.coverage, undefined); // the first start is not a gap
+  assert.ok(bot.state.pending.length > 0 && bot.state.pending.every((o) => o.forTime === T0 + 300 * MIN));
+  // The phone sleeps and wakes 20 s into a minute: no orders for it, four minutes without.
+  now = T0 + 304 * MIN + 20_000;
+  await bot.tick();
+  assert.equal(bot.state.pending.length, 0);
+  assert.deepEqual(bot.state.coverage["2026-09-01"], { live: 0, missed: 4 });
+  now = T0 + 305 * MIN + 3_000;
+  await bot.tick();
+  assert.ok(bot.state.pending.length > 0);
+  assert.deepEqual(bot.state.coverage["2026-09-01"], { live: 1, missed: 4 });
+  assert.match(bot.summary(now), /Minutos sin órdenes hoy: 4 de 5/);
+  assert.deepEqual(bot.report(now).minutosConOrdenes, bot.state.coverage);
+});
+
 test("with the default rule a side pauses on evidence of losses, not on mere doubt", () => {
   const c = { ...learnCfg, halfLifeDays: DEFAULTS.halfLifeDays, minProbability: DEFAULTS.minProbability, priorMean: DEFAULTS.priorMeanPct / 100, priorWinRate: DEFAULTS.priorWinRate };
   const now = T0 + 40 * 3_600_000;
