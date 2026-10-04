@@ -222,6 +222,44 @@ test("live minutes: coins are fetched at once, an order decided too late is skip
   assert.deepEqual(bot.report(now).minutosConOrdenes, bot.state.coverage);
 });
 
+test("without connection no minute is processed until its candles arrive, so an exit during the outage is not skipped", async () => {
+  // Minute 302 fills a buy; minute 305, while the phone is offline, reaches the target.
+  const mkt = market((i) => (i === 302 ? bar(T0 + i * MIN, 100, 100.1, 95, 97) : i > 302 && i < 305 ? bar(T0 + i * MIN, 97, 97.5, 96.5, 97) : i >= 305 ? bar(T0 + i * MIN, 101, 101.5, 100.5, 101) : null));
+  let now;
+  let offline = false;
+  const logs = [];
+  const source = {
+    minutes: async (s, since, n) => {
+      if (offline) throw new Error("fetch failed");
+      return Array.from({ length: 400 }, (_, i) => mkt.bar(s, i)).filter((b) => b.time >= since && b.time + MIN <= n);
+    },
+    coins: async () => [],
+    days: async () => [],
+  };
+  const bot = new MechasBot({ config: config({ shorts: false }), source, notify: async () => {}, log: (l) => logs.push(l), now: () => now });
+  bot.setCoins([{ symbol: "XUSDT", range: 0.2, tick: 0 }], T0);
+  for (let i = 300; i <= 303; i++) {
+    now = T0 + (i + 1) * MIN + 3_000;
+    await bot.tick();
+  }
+  assert.equal(bot.state.positions.length, 1);
+  offline = true;
+  for (let i = 304; i <= 308; i++) {
+    now = T0 + (i + 1) * MIN + 3_000;
+    await bot.tick();
+  }
+  assert.equal(bot.state.lastMinute, T0 + 303 * MIN); // waiting, nothing skipped
+  assert.equal(logs.filter((l) => /sin velas de ninguna moneda \(fetch failed\)/.test(l)).length, 1);
+  offline = false;
+  now = T0 + 310 * MIN + 3_000;
+  await bot.tick();
+  assert.equal(bot.state.closed.length, 1);
+  assert.equal(bot.state.closed[0].reason, "objetivo");
+  assert.equal(bot.state.closed[0].closedAt, T0 + 305 * MIN);
+  assert.deepEqual(bot.state.coverage["2026-09-01"], { live: 4, missed: 5 });
+  assert.ok(logs.some((l) => /velas de nuevo tras 5 min/.test(l)));
+});
+
 test("with the default rule a side pauses on evidence of losses, not on mere doubt", () => {
   const c = { ...learnCfg, halfLifeDays: DEFAULTS.halfLifeDays, minProbability: DEFAULTS.minProbability, priorMean: DEFAULTS.priorMeanPct / 100, priorWinRate: DEFAULTS.priorWinRate };
   const now = T0 + 40 * 3_600_000;

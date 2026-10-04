@@ -181,14 +181,22 @@ test("engine: the drawdown breaker closes positions and blocks new ones", async 
 
 test("engine: a failing data source is reported without stopping the bot", async () => {
   const s = setup();
+  const history = s.source.history;
   s.source.history = async () => {
     throw new Error("exchange caído");
   };
   s.setNow(T0);
   for (let i = 0; i < 5; i++) await s.bot.tick();
-  assert.ok(s.logs.some((l) => l.includes("exchange caído")));
+  // Logged once, not every round: an outage on the phone would otherwise flush the whole log.
+  assert.equal(s.logs.filter((l) => l.includes("exchange caído")).length, 1);
   assert.equal(s.messages.length, 1);
   assert.match(s.messages[0], /5 veces seguidas/);
+  s.source.history = history;
+  const { candles, signalBar } = upToSignal(s.m);
+  s.source.data.set(s.m.id, candles);
+  s.setNow(signalBar.time + HOUR);
+  await s.bot.tick();
+  assert.ok(s.logs.some((l) => /responde de nuevo tras 5 errores seguidos/.test(l)));
 });
 
 test("engine: Telegram /pausa blocks entries, /cerrar closes, /reanudar resumes", async () => {

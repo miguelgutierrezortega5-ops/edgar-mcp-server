@@ -229,7 +229,7 @@ Una segunda cuenta simulada de 50 USD, aparte del reto 1, que opera altcoins en 
 
 Las órdenes quedan esperando, así que la entrada ocurre en el segundo exacto de la mecha, aunque el bot revise una vez por minuto.
 
-Si el celular se duerme, se queda sin red o se reinicia, en esos minutos no hay órdenes; si va atrasado más de 15 segundos en un minuto, tampoco la pone, porque una orden real se habría perdido el principio de esa vela. `/mechas` dice cuántos minutos de hoy se quedaron sin órdenes y el informe diario los guarda por día, para distinguir "el mercado no dio mechas" de "el celular no estaba".
+Si el celular se duerme, se queda sin red o se reinicia, en esos minutos no hay órdenes; si va atrasado más de 15 segundos en un minuto, tampoco la pone, porque una orden real se habría perdido el principio de esa vela. `/mechas` dice cuántos minutos de hoy se quedaron sin órdenes y el informe diario los guarda por día, para distinguir "el mercado no dio mechas" de "el celular no estaba". Si se queda sin conexión, espera a tener las velas de esos minutos y los repasa, para que ningún stop ni objetivo de una posición abierta se salte.
 
 **Vigilando a las grandes.** Si BTC, ETH o SOL cayeron más de 0.2% en los últimos 5 minutos, no pone compras, porque una mecha durante una caída de las grandes suele seguir bajando. Del mismo modo, si alguna subió más de 0.2%, no pone ventas en corto.
 
@@ -260,9 +260,10 @@ La exigencia es alta a propósito. En la prueba, elegir la variante que mejor ib
 | Esta versión del bot (`npm run mechas`), septiembre con las monedas elegidas para ese mes | Compras: 68 operaciones, 71% ganadoras, +0.91%. Ventas: 38 operaciones, +0.67%; al final del mes el bot las pasó a "solo observa" porque se habían vuelto negativas. Cuenta: 56.79 USD (+13.6%), caída −4.2% |
 | **Meses que no se usaron para elegir nada (marzo a mayo de 2026)**, el bot completo, monedas elegidas cada mes con el mes anterior | Mucho más flojo. Compras +0.12% por operación (60% ganadoras); ventas −0.01%, y el bot dejó en observación 110 ventas que habrían perdido −0.26% de media. Cuenta: 50.77 USD (+1.5% en 3 meses), caída −6.7%. Sin aprendizaje: 50.56 USD con caída −11.1% |
 | Ese mismo bot de julio a septiembre | 66.79 USD (+34%), caída −8.9%. Sin aprendizaje: 71.74 USD. Con la regla de pausa anterior: 61.33 USD |
+| **Otros meses sin usar (diciembre de 2025 a febrero de 2026)**, igual que arriba | **Perdió**: 47.58 USD (−4.8% en 3 meses, los tres meses en rojo), caída −5.4%. Compras −0.12% por operación con 66% ganadoras (muy poco para pausarlas); ventas −1.05% en 18 operaciones y luego en observación. Ninguna variante de la pausa del aprendizaje lo evitaba |
 | Stop de 2× y 60 minutos (lo mejor de julio a septiembre entre 192 combinaciones) | En marzo a mayo fue **peor** que la regla actual (44.98 frente a 49.19 USD sin aprendizaje): era suerte de esos meses. No se usa |
 
-Ojo: elegí la distancia, el objetivo y el stop viendo julio a septiembre, y en marzo a mayo rindió mucho menos. Lo honesto es esperar algo entre los dos: casi plano en meses tranquilos y bueno cuando hay mechas. Por eso el bot mide cada operación y se corrige solo. Las mechas son pocas: una o dos al día por moneda en las semanas agitadas, y cero en las tranquilas.
+Ojo: elegí la distancia, el objetivo y el stop viendo julio a septiembre; en marzo a mayo rindió mucho menos y de diciembre a febrero perdió. Lo honesto es esperar poco: plano o en rojo en meses tranquilos y bueno solo cuando hay muchas mechas. Por eso el bot mide cada operación y se corrige solo. Las mechas son pocas: una o dos al día por moneda en las semanas agitadas, y cero en las tranquilas.
 
 Probarlo con datos recientes: `node dist/index.js mechas --config config.reto50.json --dias 14`. Con `--monedas BEAT,TUT` usa esas monedas y con `--hasta 2026-09-30` termina en esa fecha. Al final muestra también cómo habrían ido las variantes en la sombra en esos días (con pocos días la z sale alta por azar; por eso el bot exige 60).
 

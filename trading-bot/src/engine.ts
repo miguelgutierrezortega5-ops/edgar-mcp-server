@@ -181,6 +181,7 @@ export class Bot {
     for (const [tf, ref] of refs) {
       try {
         this.references.set(tf, closedCandles(await this.refresh(ref), ref.timeframe, now));
+        this.recovered(ref.id);
       } catch (err) {
         this.references.delete(tf);
         await this.fail(ref.id, err);
@@ -219,7 +220,7 @@ export class Bot {
       if (!candles) continue;
       try {
         await this.processMarket(m, candles, now);
-        this.errors.delete(m.id);
+        this.recovered(m.id);
       } catch (err) {
         await this.fail(m.id, err);
       }
@@ -242,7 +243,7 @@ export class Bot {
     }
     const equity = await broker.equity(this.state.positions, this.marks);
     this.equity.set(broker.name, equity);
-    this.errors.delete(broker.name);
+    this.recovered(broker.name);
     const risk = (this.state.risk[broker.name] ??= newRiskState(equity, now));
     if (updateRisk(risk, this.d.config.risk, equity, now)) {
       const msg = `⛔ ${broker.name}: trading detenido por ${risk.halted}. Cierro sus posiciones. Reanuda con "npm run status -- --reanudar".`;
@@ -403,8 +404,15 @@ export class Bot {
     const count = (this.errors.get(key) ?? 0) + 1;
     this.errors.set(key, count);
     const msg = `Error en ${key}: ${(err as Error).message ?? err}`;
-    this.d.log(msg);
+    // The first, then every 30th in a row: a phone without connection should not flush the whole log.
+    if (count === 1 || count % 30 === 0) this.d.log(count === 1 ? msg : `${msg} (${count} veces seguidas)`);
     if (count === 5) await this.d.notify(`⚠️ ${msg} (5 veces seguidas)`);
+  }
+
+  private recovered(key: string): void {
+    const count = this.errors.get(key);
+    if (count && count > 1) this.d.log(`${key} responde de nuevo tras ${count} errores seguidos`);
+    this.errors.delete(key);
   }
 
   async run(signal: AbortSignal): Promise<void> {

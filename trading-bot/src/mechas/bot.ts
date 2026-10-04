@@ -12,7 +12,8 @@ import { selectCoins, type Pick } from "./universe.js";
 // live bot and the backtest (`processMinute`), so both follow identical rules. While the bot is not
 // running (phone asleep) it places no orders, but open positions keep their target and stop, as they
 // would resting on the exchange: catching up, missed minutes are replayed for exits only. An order decided
-// late into its minute is skipped too: a real one would have missed the first part of that candle.
+// late into its minute is skipped too: a real one would have missed the first part of that candle. A minute
+// is processed only once every candle is in (a phone without connection waits), so no exit is skipped.
 
 export interface MechasConfig {
   enabled: boolean;
@@ -83,6 +84,8 @@ const MAX_CLOSED = 300;
 const MAX_OUTCOMES = 4000;
 /** Orders decided later than this into their minute are not placed. */
 const LATE_MS = 15_000;
+/** When only some coins fail to load, wait this long before going on without them. */
+const WAIT_MS = 10 * 60_000;
 const COVERAGE_DAYS = 14;
 
 export function mechasParams(c: MechasConfig): MechasParams {
@@ -128,6 +131,8 @@ export interface MechasDeps {
 export class MechasBot {
   state: MechasState;
   private readonly bars = new Map<string, Bar[]>();
+  /** Since when some candles fail to load (no connection). */
+  private offlineSince?: number;
   private readonly p: MechasParams;
   /** Shadow variants by key; the configured one first. */
   private readonly variants: Map<string, Variant>;
@@ -383,17 +388,31 @@ export class MechasBot {
     // A long gap: positions have expired; replay at most a day.
     const from = Math.max(prev + MINUTE, latest - DAY);
     // All at once: one slow answer on a phone's connection should not hold up the minute for the rest.
+    const symbols = this.symbols;
+    const failed: string[] = [];
+    let reason = "";
     await Promise.all(
-      this.symbols.map(async (symbol) => {
+      symbols.map(async (symbol) => {
         const have = this.bars.get(symbol)?.at(-1)?.time;
         const since = have && have >= latest - DAY ? have + MINUTE : Math.min(from, latest - 300 * MINUTE);
         try {
           this.addBars(symbol, await this.d.source.minutes(symbol, since, now));
         } catch (err) {
-          this.d.log(`Reto 2: sin velas de ${symbol} (${(err as Error).message})`);
+          failed.push(short(symbol));
+          reason = (err as Error).message;
         }
       }),
     );
+    if (failed.length) {
+      if (!this.offlineSince) this.d.log(`Reto 2: sin velas de ${failed.length === symbols.length ? "ninguna moneda" : failed.join(", ")} (${reason}); espero a tenerlas`);
+      this.offlineSince ??= now;
+      // A minute without its candle would skip exits and resting orders: wait for it (catching up later
+      // replays it). Only coins that keep failing while the rest load are left out, after a while.
+      if (prev && (failed.length === symbols.length || now - this.offlineSince < WAIT_MS)) return;
+    } else if (this.offlineSince) {
+      this.d.log(`Reto 2: velas de nuevo tras ${Math.round((now - this.offlineSince) / MINUTE)} min sin ellas`);
+      this.offlineSince = undefined;
+    }
     const onTime = this.now - (latest + MINUTE) <= LATE_MS;
     for (let t = from; t <= latest; t += MINUTE) {
       const live = t === latest && onTime;
