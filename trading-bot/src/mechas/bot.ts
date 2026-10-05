@@ -14,6 +14,8 @@ import { selectCoins, type Pick } from "./universe.js";
 // would resting on the exchange: catching up, missed minutes are replayed for exits only. An order decided
 // late into its minute is skipped too: a real one would have missed the first part of that candle. A minute
 // is processed only once every candle is in (a phone without connection waits), so no exit is skipped.
+// With `orderMinutes` > 1 an order keeps resting while the bot cannot replace it, as it would on the
+// exchange, so a sleeping phone still catches wicks with the orders it left.
 
 export interface MechasConfig {
   enabled: boolean;
@@ -34,6 +36,7 @@ export interface MechasConfig {
   throughPct: number;
   leaderMovePct: number;
   orderPct: number;
+  orderMinutes: number;
   minOrderUsd: number;
   maxPositions: number;
   leverage: number;
@@ -256,7 +259,7 @@ export class MechasBot {
    * One minute: exits of open positions, fills of the orders resting during it and, when `live`, the
    * orders for the next minute. Bars must already be loaded up to `t`.
    */
-  processMinute(t: number, live: boolean): void {
+  processMinute(t: number, live: boolean, placeFrom = t + MINUTE): boolean {
     const p = this.p;
     for (const pos of [...this.state.positions]) {
       const bar = this.barAt(pos.symbol, t);
@@ -264,8 +267,9 @@ export class MechasBot {
       const done = advance(pos, bar, this.paramsFor(pos.side));
       if (done) this.settle(pos, done);
     }
-    const resting = this.state.pending.filter((o) => o.forTime === t);
-    this.state.pending = this.state.pending.filter((o) => o.forTime > t);
+    const last = (o: Order) => o.until ?? o.forTime;
+    const resting = this.state.pending.filter((o) => o.forTime <= t && t <= last(o));
+    this.state.pending = this.state.pending.filter((o) => last(o) > t);
     for (const symbol of new Set(resting.map((o) => o.symbol))) {
       const bar = this.barAt(symbol, t);
       if (!bar) continue;
@@ -276,6 +280,8 @@ export class MechasBot {
       if (!order.virtual && this.state.positions.filter((x) => !x.virtual).length >= this.d.config.maxPositions) order.virtual = true;
       const { position, closed } = fill(order, bar, this.paramsFor(order.side));
       this.state.positions.push(position);
+      // One position per coin: its other orders go away with the fill.
+      this.state.pending = this.state.pending.filter((o) => o.symbol !== symbol);
       if (!position.virtual && !closed) this.announceEntry(position);
       if (closed) this.settle(position, closed);
       if (!position.virtual && !this.state.firstTradeAt) {
@@ -285,8 +291,9 @@ export class MechasBot {
     }
     shadowMinute(this.shadow, [...this.variants.values()], this.state.coins, t, this.market, p, this.d.config.shorts);
     if (dayOf(t) > this.shadow.checkedDay) this.retune(dayOf(t));
-    if (live) this.placeOrders(t);
+    if (live) this.placeOrders(t, placeFrom);
     this.state.lastMinute = t;
+    return resting.length > 0;
   }
 
   private announceEntry(pos: Position): void {
@@ -334,8 +341,12 @@ export class MechasBot {
     return { dias, lados, cambios: s.switches };
   }
 
-  private placeOrders(t: number): void {
+  private placeOrders(t: number, from: number): void {
     const c = this.d.config;
+    // Each round replaces the resting orders (cancel and place again at the new prices) from `from` on;
+    // when late, the ones already resting in the current minute stay for it.
+    this.state.pending = this.state.pending.filter((o) => o.forTime < from).map((o) => ({ ...o, until: Math.min(o.until ?? o.forTime, from - MINUTE) }));
+    const until = from + (c.orderMinutes - 1) * MINUTE;
     const views = this.views(t);
     const moves = this.leaderMoves(t);
     const equity = this.state.balance;
@@ -355,7 +366,7 @@ export class MechasBot {
         // Resting orders reserve margin on the exchange; without room the order is only followed.
         const virtual = v.scale === 0 || margin + notional / c.leverage > equity;
         if (!virtual) margin += notional / c.leverage;
-        this.state.pending.push({ symbol: coin.symbol, side, price: orderPrice(side, ref, dist), distance: dist, forTime: t + MINUTE, notional: virtual ? base : notional, virtual, tick: coin.tick, predicted: { pWin: v.pWin, mean: v.mean } });
+        this.state.pending.push({ symbol: coin.symbol, side, price: orderPrice(side, ref, dist), distance: dist, forTime: from, until, notional: virtual ? base : notional, virtual, tick: coin.tick, predicted: { pWin: v.pWin, mean: v.mean } });
       }
     }
   }
@@ -413,11 +424,13 @@ export class MechasBot {
       this.d.log(`Reto 2: velas de nuevo tras ${Math.round((now - this.offlineSince) / MINUTE)} min sin ellas`);
       this.offlineSince = undefined;
     }
+    // Late into the minute: its orders would miss part of the candle, so they start with the next one
+    // (only useful when orders rest for more than a minute).
     const onTime = this.now - (latest + MINUTE) <= LATE_MS;
+    const placeFrom = latest + (onTime ? MINUTE : 2 * MINUTE);
     for (let t = from; t <= latest; t += MINUTE) {
-      const live = t === latest && onTime;
-      this.processMinute(t, live);
-      if (prev) this.count(t, live);
+      const resting = this.processMinute(t, t === latest, placeFrom);
+      if (prev) this.count(t, resting);
     }
     this.save();
   }

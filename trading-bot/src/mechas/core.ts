@@ -53,8 +53,10 @@ export interface Order {
   price: number;
   /** Distance from the reference close, as a fraction. */
   distance: number;
-  /** Start time of the minute the order rests in. */
+  /** Start time of the first minute the order rests in. */
   forTime: number;
+  /** Start time of the last minute it rests in, unless replaced first (absent: only `forTime`). */
+  until?: number;
   notional: number;
   /** Not traded (side paused by the learner, or no room): followed only to keep learning. */
   virtual: boolean;

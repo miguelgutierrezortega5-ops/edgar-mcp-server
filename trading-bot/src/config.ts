@@ -160,6 +160,8 @@ const configSchema = z
         leaderMovePct: z.number().positive().default(0.2),
         /** Notional per order, % of the balance; the learner scales it down to 0 (observe only). */
         orderPct: z.number().positive().max(100).default(15),
+        /** Minutes an order keeps resting if the bot cannot replace it (phone asleep), as on the exchange. */
+        orderMinutes: z.number().int().min(1).max(60).default(1),
         minOrderUsd: z.number().min(0).default(5),
         maxPositions: z.number().int().positive().default(4),
         leverage: z.number().positive().max(20).default(10),

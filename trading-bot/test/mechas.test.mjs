@@ -187,7 +187,7 @@ test("the state survives a restart, and missed minutes only close positions, nev
   }
 });
 
-test("live minutes: coins are fetched at once, an order decided too late is skipped, minutes without orders are counted", async () => {
+test("live minutes: coins are fetched at once, a late phone places its orders for the next minute, minutes without orders are counted", async () => {
   const mkt = market();
   let now;
   let inFlight = 0;
@@ -204,22 +204,46 @@ test("live minutes: coins are fetched at once, an order decided too late is skip
   };
   const bot = new MechasBot({ config: config({ shorts: false }), source, notify: async () => {}, log: () => {}, now: () => now });
   bot.setCoins([{ symbol: "XUSDT", range: 0.2, tick: 0 }], T0);
+  const restingIn = () => [...new Set(bot.state.pending.map((o) => (o.forTime - T0) / MIN))].sort();
   now = T0 + 300 * MIN + 3_000;
   await bot.tick();
   assert.ok(most > 1, "the coins are requested in parallel");
   assert.equal(bot.state.coverage, undefined); // the first start is not a gap
-  assert.ok(bot.state.pending.length > 0 && bot.state.pending.every((o) => o.forTime === T0 + 300 * MIN));
-  // The phone sleeps and wakes 20 s into a minute: no orders for it, four minutes without.
+  assert.deepEqual(restingIn(), [300]);
+  // The phone sleeps and wakes 20 s into minute 304: too late for it, so its orders start with minute 305.
   now = T0 + 304 * MIN + 20_000;
   await bot.tick();
-  assert.equal(bot.state.pending.length, 0);
-  assert.deepEqual(bot.state.coverage["2026-09-01"], { live: 0, missed: 4 });
+  assert.deepEqual(restingIn(), [305]);
+  assert.deepEqual(bot.state.coverage["2026-09-01"], { live: 1, missed: 3 }); // 300 had orders, 301-303 none
   now = T0 + 305 * MIN + 3_000;
   await bot.tick();
-  assert.ok(bot.state.pending.length > 0);
+  assert.deepEqual(restingIn(), [305]); // replaced at the new prices
   assert.deepEqual(bot.state.coverage["2026-09-01"], { live: 1, missed: 4 });
   assert.match(bot.summary(now), /Minutos sin órdenes hoy: 4 de 5/);
   assert.deepEqual(bot.report(now).minutosConOrdenes, bot.state.coverage);
+  // A phone that keeps running 40 s late: after the first late minute (306) every minute has orders,
+  // because the ones placed during the minute before stay for it.
+  for (const i of [306, 307, 308, 309]) {
+    now = T0 + i * MIN + 40_000;
+    await bot.tick();
+  }
+  assert.deepEqual(restingIn(), [309, 310]);
+  assert.deepEqual(bot.state.coverage["2026-09-01"], { live: 4, missed: 5 }); // 305, 307, 308 with orders; 306 without
+});
+
+test("with orderMinutes an order keeps resting while the phone sleeps and fills when it catches up", async () => {
+  for (const [orderMinutes, fills] of [[1, 0], [5, 1]]) {
+    // Minute 302 (phone asleep since 300:03) dips 5%: a resting buy at about 4% below catches it.
+    const mkt = market((i) => (i === 302 ? bar(T0 + i * MIN, 100, 100.1, 95, 99.9) : null));
+    let now = T0 + 300 * MIN + 3_000;
+    const source = { minutes: async (s, since, n) => Array.from({ length: 400 }, (_, i) => mkt.bar(s, i)).filter((b) => b.time >= since && b.time + MIN <= n), coins: async () => [], days: async () => [] };
+    const bot = new MechasBot({ config: config({ shorts: false, orderMinutes }), source, notify: async () => {}, log: () => {}, now: () => now });
+    bot.setCoins([{ symbol: "XUSDT", range: 0.2, tick: 0 }], T0);
+    await bot.tick();
+    now = T0 + 307 * MIN + 3_000;
+    await bot.tick();
+    assert.equal(bot.state.closed.length + bot.state.positions.length, fills, `orderMinutes ${orderMinutes}`);
+  }
 });
 
 test("without connection no minute is processed until its candles arrive, so an exit during the outage is not skipped", async () => {
@@ -256,7 +280,7 @@ test("without connection no minute is processed until its candles arrive, so an 
   assert.equal(bot.state.closed.length, 1);
   assert.equal(bot.state.closed[0].reason, "objetivo");
   assert.equal(bot.state.closed[0].closedAt, T0 + 305 * MIN);
-  assert.deepEqual(bot.state.coverage["2026-09-01"], { live: 4, missed: 5 });
+  assert.deepEqual(bot.state.coverage["2026-09-01"], { live: 2, missed: 7 });
   assert.ok(logs.some((l) => /velas de nuevo tras 5 min/.test(l)));
 });
 
