@@ -190,6 +190,24 @@ const configSchema = z
       .strict()
       .refine((m) => m.fullProbability > m.minProbability, "mechas.fullProbability debe ser mayor que minProbability")
       .default({}),
+    /** Challenge 3, trend following on daily closes (src/tendencia): its own simulated spot account. */
+    tendencia: z
+      .object({
+        enabled: z.boolean().default(false),
+        startingBalance: z.number().positive().default(50),
+        /** One equal slot each (5 x 20% keeps every order above Binance's 5 USD minimum at 50 USD). */
+        coins: z.array(z.string().min(1)).min(1).default(["BTC", "ETH", "BNB", "SOL", "ADA"]),
+        quote: z.string().default("USDT"),
+        /** Donchian lookbacks of the ensemble, in days (as published). */
+        lookbacks: z.array(z.number().int().positive()).min(1).default([5, 10, 20, 30, 60, 90, 150, 250, 360]),
+        /** Share of the lookbacks that must be in a trend to hold the coin. */
+        threshold: z.number().gt(0).max(1).default(0.5),
+        minOrderUsd: z.number().min(0).default(5),
+        feePct: z.number().min(0).default(0.1),
+        slippagePct: z.number().min(0).default(0.05),
+      })
+      .strict()
+      .default({}),
     telegram: z
       .object({
         enabled: z.boolean().default(true),

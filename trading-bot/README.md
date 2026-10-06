@@ -147,6 +147,7 @@ Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env`, el bot avisa de cada op
 | `/actualizar` | Instala las mejoras nuevas del bot y lo reinicia con ellas |
 | `/informe` | Publica ya el informe detallado para Claude (ver abajo) |
 | `/mechas` | Reto 2: saldo, posiciones, qué tan bien acierta (predicción frente a realidad) y cómo van las variantes en la sombra |
+| `/tendencia` | Reto 3: saldo, qué monedas están en tendencia (cuántos de sus 9 plazos) y cuánto hay en cada una |
 
 Los mensajes enviados mientras el bot estaba apagado se descartan, no se ejecutan.
 
@@ -159,6 +160,7 @@ Una vez al día, y cuando escribes `/informe`, el bot manda al chat un archivo `
 - pausas;
 - parámetros y lo aprendido;
 - la capa adaptativa;
+- los retos 2 y 3: saldo, operaciones, lados o monedas en tendencia y su historial;
 - las últimas 400 líneas del registro, que dicen qué señales ignoró y por qué.
 
 No contiene claves ni tokens. Con el token del bot, Claude lee el último informe fijado (`node scripts/leer-informe.mjs`) y aprende de lo que pasa en tu celular, que es la copia con futuros en vivo. Telegram no deja que un bot lea los mensajes que él mismo envió, así que el archivo fijado es la forma de que llegue. Para cambiar la frecuencia, usa `telegram.reportHours` en la configuración; con `0` solo se publica con `/informe`.
@@ -268,6 +270,28 @@ Ojo: elegí la distancia, el objetivo y el stop viendo julio a septiembre; en ma
 Probarlo con datos recientes: `node dist/index.js mechas --config config.reto50.json --dias 14`. Con `--monedas BEAT,TUT` usa esas monedas y con `--hasta 2026-09-30` termina en esa fecha. Al final muestra también cómo habrían ido las variantes en la sombra en esos días (con pocos días la z sale alta por azar; por eso el bot exige 60).
 
 **Datos móviles.** El bot consulta 15 velas por minuto (12 monedas y las 3 grandes): unos 30 MB al día más.
+
+## Reto 3: seguir tendencias (50 USD, velas diarias)
+
+Una tercera cuenta simulada de 50 USD, aparte de los retos 1 y 2, que hace lo contrario que ellos: en vez de comprar caídas y vender pronto con una ganancia pequeña, compra lo que ya sube y aguanta mientras la subida dure. Es la forma de operar de muchos de los bots y fondos con mejores resultados comprobables, que aciertan solo un 30-40% de las veces pero ganan mucho más en sus aciertos de lo que pierden en sus fallos. Corre en el mismo bot y el mismo Telegram (`/tendencia`) y te avisa de cada compra y venta. Se enciende con `"tendencia": { "enabled": true }` y ya viene encendido en `config.reto50.json`.
+
+**Cómo opera.** Sigue BTC, ETH, BNB, SOL y ADA (las 5 más grandes de enero de 2022), cada una con una parte fija del 20% de la cuenta (10 USD al empezar, por encima del mínimo de 5 USD de Binance). Una vez al día, al cerrar las velas diarias (00:00 UTC, 18:00 en México), mira cada moneda con 9 plazos: 5, 10, 20, 30, 60, 90, 150, 250 y 360 días. En cada plazo, la moneda entra en tendencia cuando cierra por encima del cierre más alto de ese plazo, y sale cuando cae por debajo del punto medio del canal (entre el más alto y el más bajo), que solo sube mientras dura la tendencia. Si al menos 5 de los 9 plazos dicen "tendencia", la tiene; si no, su parte espera en efectivo. Es el método de Zarattini, Pagani y Barbon (2025, "Catching Crypto Trends"), sin ajustar nada, adaptado a una cuenta pequeña. Al usar solo velas diarias, aunque el celular se duerma o se reinicie, en cuanto despierta decide con el último cierre.
+
+**Lo que midió** (velas diarias de Binance, cuenta de 50 USD en efectivo, comisión 0.1% y deslizamiento 0.05% en cada compra y venta, decide al cierre y opera a la apertura siguiente):
+
+| Periodo | Reto 3 | BTC comprado y guardado |
+| --- | --- | --- |
+| 2022 (año bajista) | −6.1% (caída máx. −8%) | −65.3% (caída máx. −67%) |
+| 2023 | +64.3% | +155.6% |
+| 2024 | +47.0% | +121.3% |
+| 2025 | +3.6% | −6.3% |
+| 2026 hasta el 3 de octubre | +1.0% | −3.3% |
+| **2022 a octubre de 2026** | **+136.9%, caída máx. −25%** | +77.6%, caída máx. −67% |
+| Desde que se publicó el método (abril 2025 a octubre 2026) | +10.9%, caída máx. −17% | −0.5%, caída máx. −53% |
+
+Sale de 160 tendencias en ese tiempo: solo el 34% acaban con ganancia, pero ganan de media 2.07 USD y las otras pierden 0.69 USD. Con otras variantes (4 o 6 monedas, umbral de 3 o 7 de 9 plazos, comisión de 0.25%) dio entre +89% y +140% en el total y entre +7% y +17% después de publicarse, así que no depende de un ajuste fino. Ojo: en los años alcistas gana menos que guardar BTC (se sale en las correcciones), pierde poco en los bajistas y en los años sin tendencia queda casi plano. Puede caer un 25% en el camino.
+
+Probarlo: `node dist/index.js tendencia --config config.reto50.json --dias 365` (con `--hasta 2026-09-30` termina en esa fecha).
 
 ## Futuros de Binance
 

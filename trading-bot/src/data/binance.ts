@@ -38,20 +38,24 @@ export class BinanceSource implements CandleSource {
   }
 
   async history(market: Market, since: number): Promise<Candle[]> {
-    const step = TIMEFRAME_MS[market.timeframe];
-    const symbol = `${market.base}${market.quote}`;
-    const now = Date.now();
-    if (!this.cacheDir || now - since <= CACHE_FROM_BARS * step) return this.download(symbol, market.timeframe, step, since);
+    return this.candles(`${market.base}${market.quote}`, market.timeframe, since);
+  }
 
-    const key = `${symbol}_${market.timeframe}`;
+  /** Candles of any symbol (e.g. BTCUSDT) from `since`; the last one may still be forming. */
+  async candles(symbol: string, timeframe: Market["timeframe"], since: number): Promise<Candle[]> {
+    const step = TIMEFRAME_MS[timeframe];
+    const now = Date.now();
+    if (!this.cacheDir || now - since <= CACHE_FROM_BARS * step) return this.download(symbol, timeframe, step, since);
+
+    const key = `${symbol}_${timeframe}`;
     const file = join(this.cacheDir, `${key}.json`);
     let cached = this.memory.get(key) ?? (existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Candle[]) : []);
     const before = cached.length;
     if (!cached.length || since < cached[0].time) {
-      const head = await this.download(symbol, market.timeframe, step, since, cached[0]?.time);
+      const head = await this.download(symbol, timeframe, step, since, cached[0]?.time);
       cached = [...head, ...cached];
     }
-    const tail = await this.download(symbol, market.timeframe, step, cached.length ? cached.at(-1)!.time + step : since);
+    const tail = await this.download(symbol, timeframe, step, cached.length ? cached.at(-1)!.time + step : since);
     const all = [...cached, ...tail.filter((c) => !cached.length || c.time > cached.at(-1)!.time)];
     // The forming bar is returned but never cached.
     const closed = all.filter((c) => c.time + step <= now);

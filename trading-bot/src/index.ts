@@ -21,6 +21,9 @@ import { backtestMechas } from "./mechas/backtest.js";
 import { MechasBot } from "./mechas/bot.js";
 import { calibration } from "./mechas/learn.js";
 import { selectCoins } from "./mechas/universe.js";
+import { BinanceSource } from "./data/binance.js";
+import { backtestTendencia } from "./tendencia/backtest.js";
+import { TendenciaBot, type DailySource } from "./tendencia/bot.js";
 import { join } from "node:path";
 import { buildBrokers, buildSources } from "./setup.js";
 import { paperName, Store } from "./store.js";
@@ -53,6 +56,9 @@ Comandos:
   mechas                   Reto 2 (cazador de mechas): elige las altcoins y lo prueba con velas de 1 minuto
       --dias N             Días de historia del archivo de Binance (por defecto 7)
       --monedas A,B,C      Esas monedas en vez de elegirlas (p. ej. BEAT,TUT)
+      --hasta AAAA-MM-DD   Último día de la prueba (por defecto ayer)
+  tendencia                Reto 3 (seguir tendencias): lo prueba con velas diarias de Binance
+      --dias N             Días de historia (por defecto 365)
       --hasta AAAA-MM-DD   Último día de la prueba (por defecto ayer)
   status                   Saldo, posiciones abiertas, últimas operaciones y límites de riesgo
       --reanudar           Reactiva el trading tras una parada por drawdown
@@ -363,6 +369,7 @@ function report(config: Config, r: PortfolioResult, type: "crypto" | "forex", li
 
 async function status(config: Config, markets: Market[], resume: boolean): Promise<void> {
   if (config.mechas.enabled && existsSync(join(config.dataDir, "mechas", "estado.json"))) console.log(`${mechasBot(config, async () => {}).summary()}\n`);
+  if (config.tendencia.enabled && existsSync(join(config.dataDir, "tendencia", "estado.json"))) console.log(`${tendenciaBot(config, async () => {}).summary()}\n`);
   const store = new Store(config.dataDir);
   if (!existsSync(store.statePath)) {
     console.log(`Todavía no hay estado guardado en ${store.statePath}: el bot no ha arrancado aún.`);
@@ -460,6 +467,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   const notify = telegramNotifier(config.telegram.enabled, log);
   // Its first real trade also publishes a report, so Claude can follow it up (without moving the daily one).
   const mechas = config.mechas.enabled ? mechasBot(config, notify, () => void sendReport("primera operación del reto 2").catch(() => undefined)) : undefined;
+  const tendencia = config.tendencia.enabled ? tendenciaBot(config, notify) : undefined;
   const learning = config.learning;
   const relearn = async () => {
     const last = loadLearning(config.dataDir);
@@ -500,6 +508,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
       aprendizaje: loadLearning(config.dataDir),
       adaptativo: adaptiveState,
       reto2: mechas?.report(),
+      reto3: tendencia?.report(),
       registro: logTail,
     };
     const title = `📊 Informe para Claude${reason ? `: ${reason}` : ""} (${describeVersion(version)})`;
@@ -576,6 +585,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   };
   const onCommand = async (c: Command): Promise<string | undefined> => {
     if (c.name === "mechas") return mechas ? mechas.summary() : "El reto 2 (cazador de mechas) está apagado: mechas.enabled en la configuración.";
+    if (c.name === "tendencia") return tendencia ? tendencia.summary() : "El reto 3 (seguir tendencias) está apagado: tendencia.enabled en la configuración.";
     if (c.name === "informe") return (await sendReport()) ? "📌 Informe publicado y fijado para Claude." : "❌ No se pudo publicar el informe (revisa el registro).";
     if (c.name !== "actualizar") return undefined;
     await notify("⏳ Buscando mejoras en GitHub… (instalarlas tarda un par de minutos)");
@@ -590,11 +600,13 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
     log(`  ${m.id.padEnd(14)} → ${b.name} (${mode}), ${strategyOf(m).name}${m.allowShort ? ", largos y cortos" : ", solo largos"}${m.paused ? " — en pausa" : ""}`);
   }
   if (mechas) log(`Reto 2 (cazador de mechas): cuenta simulada de ${fmt.money(mechas.state.balance, "USD")}, velas de 1 minuto, ${config.mechas.shorts ? "compras y ventas en corto" : "solo compras"}`);
+  if (tendencia) log(`Reto 3 (seguir tendencias): cuenta simulada de ${fmt.money(tendencia.value(), "USD")}, velas diarias de ${config.tendencia.coins.join(", ")}`);
   if (once) {
     await beforeTick();
     await bot.init();
     await bot.tick();
     await mechas?.tick();
+    await tendencia?.tick();
     return;
   }
   const stop = () => {
@@ -609,7 +621,49 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
     log(rolledBack);
     await notify(`⚠️ ${rolledBack}`);
   }
-  await Promise.all([bot.run(controller.signal), mechas?.run(controller.signal)]);
+  await Promise.all([bot.run(controller.signal), mechas?.run(controller.signal), tendencia?.run(controller.signal)]);
+}
+
+/** Daily spot candles from Binance, cached on disk with the bot's other candles. */
+const dailySource = (config: Config): DailySource => {
+  const binance = new BinanceSource(join(config.dataDir, "velas"));
+  return { days: (symbol, since) => binance.candles(symbol, "1d", since) };
+};
+
+const tendenciaBot = (config: Config, notify: (text: string) => Promise<void>) =>
+  new TendenciaBot({ config: config.tendencia, source: dailySource(config), notify, log, dir: join(config.dataDir, "tendencia") });
+
+async function runTendencia(config: Config, days: number, until?: string): Promise<void> {
+  const end = until ? Date.parse(`${until}T00:00:00Z`) + DAY : Math.floor(Date.now() / DAY) * DAY;
+  if (!Number.isFinite(end)) throw new Error("--hasta debe ser una fecha AAAA-MM-DD");
+  const from = end - days * DAY;
+  console.log(`Reto 3 (seguir tendencias) con ${config.tendencia.coins.join(", ")}, ${fmt.money(config.tendencia.startingBalance, "USD")}: decide al cierre diario y opera a la apertura del día siguiente.`);
+  const r = await backtestTendencia(config.tendencia, dailySource(config), from, end, log);
+  if (!r.equity.length) throw new Error("no hay velas diarias para ese periodo");
+  const stats = (e: { day: number; value: number }[], a: number, b: number, start?: number) => {
+    const xs = e.filter((x) => x.day >= a && x.day < b);
+    if (xs.length < 2) return "—";
+    let peak = start ?? xs[0].value;
+    let dd = 0;
+    for (const x of xs) (peak = Math.max(peak, x.value)), (dd = Math.min(dd, x.value / peak - 1));
+    return `${fmt.pct((xs.at(-1)!.value / (start ?? xs[0].value) - 1) * 100).padStart(8)}, caída máx. ${fmt.pct(dd * 100).padStart(7)}`;
+  };
+  const first = r.equity[0].day;
+  const periods: [string, number, number][] = [];
+  for (let y = new Date(first).getUTCFullYear(); y <= new Date(end).getUTCFullYear(); y++) periods.push([String(y), Math.max(first, Date.UTC(y, 0, 1)), Math.min(end + DAY, Date.UTC(y + 1, 0, 1))]);
+  console.log(`\n${"Periodo".padEnd(8)} ${"Reto 3".padEnd(30)} BTC comprado y guardado`);
+  for (const [name, a, b] of periods) {
+    const before = (e: typeof r.equity) => e.filter((x) => x.day < a).at(-1)?.value;
+    console.log(`${name.padEnd(8)} ${stats(r.equity, a, b, before(r.equity) ?? config.tendencia.startingBalance).padEnd(30)} ${stats(r.btc, a, b, before(r.btc) ?? config.tendencia.startingBalance)}`);
+  }
+  console.log(`${"Todo".padEnd(8)} ${stats(r.equity, first, end + DAY, config.tendencia.startingBalance).padEnd(30)} ${stats(r.btc, first, end + DAY, config.tendencia.startingBalance)}`);
+  const sells = r.trades.filter((t) => t.reason === "sale");
+  const wins = sells.filter((t) => (t.pnl ?? 0) > 0);
+  const sum = (xs: typeof sells) => xs.reduce((a, t) => a + (t.pnl ?? 0), 0);
+  console.log(`\nCuenta: ${fmt.money(config.tendencia.startingBalance, "USD")} → ${fmt.money(r.equity.at(-1)!.value, "USD")}. Órdenes: ${r.trades.length}, comisiones ${fmt.money(r.trades.reduce((a, t) => a + t.fee, 0), "USD")}.`);
+  if (sells.length) console.log(`Salidas de tendencia: ${sells.length}, ganadoras ${wins.length} (${((wins.length / sells.length) * 100).toFixed(0)}%): ganan de media ${fmt.money(sum(wins) / (wins.length || 1), "USD")} y las perdedoras pierden ${fmt.money(-sum(sells.filter((t) => (t.pnl ?? 0) <= 0)) / (sells.length - wins.length || 1), "USD")} (pocas grandes ganancias pagan muchas pérdidas chicas).`);
+  console.log(`\n${r.bot.summary()}`);
+  console.log("\nOjo: un backtest no garantiza resultados futuros. En años sin tendencia (2022, inicio de 2025) perdió un poco; gana cuando hay subidas largas.");
 }
 
 const mechasBot = (config: Config, notify: (text: string) => Promise<void>, onFirstTrade?: () => void) =>
@@ -711,6 +765,11 @@ async function main(): Promise<void> {
       const days = Number(values.dias ?? 7);
       if (!(days > 0)) throw new Error("--dias debe ser un número positivo");
       return runMechas(config, days, values.monedas, values.hasta);
+    }
+    case "tendencia": {
+      const days = Number(values.dias ?? 365);
+      if (!(days > 0)) throw new Error("--dias debe ser un número positivo");
+      return runTendencia(config, days, values.hasta);
     }
     case "run":
     case "bot":

@@ -110,5 +110,6 @@
     "enabled": true
   },
   "mechas": { "enabled": true },
+  "tendencia": { "enabled": true },
   "updates": { "auto": true, "checkHours": 1 }
 }
