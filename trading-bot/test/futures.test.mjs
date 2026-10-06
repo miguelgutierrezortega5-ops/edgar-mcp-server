@@ -6,6 +6,7 @@ import { deflateRawSync } from "node:zlib";
 import { after, afterEach, test } from "node:test";
 import { assess, futuresState, scaleFor } from "../dist/adaptive.js";
 import { alignToBars, FuturesSource, openInterestChange, parseMetricsCsv, resetFuturesLive } from "../dist/data/futures.js";
+import { FuturesMinutes, resetFuturesMinutes } from "../dist/data/futures1m.js";
 import { firstZipEntry } from "../dist/data/zip.js";
 import { features, footprintsAt } from "../dist/research.js";
 import { T0 } from "./helpers.mjs";
@@ -15,6 +16,7 @@ const dirs = [];
 afterEach(() => {
   globalThis.fetch = realFetch;
   resetFuturesLive();
+  resetFuturesMinutes();
 });
 after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const M5 = 5 * 60_000;
@@ -90,6 +92,34 @@ test("futures source: archive days (cached), then the live API, which may be geo
   assert.equal(calls.filter((c) => c.includes("fapi")).length, 5);
   const funding = await fs.funding("ALTUSDT", T0, now);
   assert.deepEqual(funding.map((f) => f.rate), [0.0001, -0.0002]);
+});
+
+test("1-minute futures: a 451 switches to spot prices and warns once; futures are asked again later and come back", async () => {
+  const alerts = [];
+  const calls = [];
+  let blocked = true;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("fapi.binance.com")) return blocked ? new Response('{"code":0,"msg":"restricted location"}', { status: 451 }) : new Response(JSON.stringify([[T0, "1", "2", "0.5", "1.5"]]));
+    return new Response(JSON.stringify([[T0, "1", "2", "0.5", "1.4"]]));
+  };
+  const src = new FuturesMinutes(undefined, () => {}, (m) => alerts.push(m));
+  const now = T0 + 5 * 60_000;
+  const spot = await Promise.all(["AUSDT", "BUSDT", "CUSDT"].map((s) => src.minutes(s, T0, now)));
+  assert.ok(spot.every((b) => b[0].close === 1.4));
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /HTTP 451.*VPN/);
+  assert.equal(src.usingFutures, false);
+  const asked = calls.filter((c) => c.includes("fapi")).length;
+  await src.minutes("AUSDT", T0, now); // within the 30 minutes it does not ask again
+  assert.equal(calls.filter((c) => c.includes("fapi")).length, asked);
+  FuturesMinutes.block.reset(true); // the 30 minutes went by
+  blocked = false;
+  const bars = await src.minutes("AUSDT", T0, now);
+  assert.equal(bars[0].close, 1.5);
+  assert.equal(src.usingFutures, true);
+  assert.match(alerts[1], /responde de nuevo/);
 });
 
 test("futures source: live points fill the hours the archive does not have yet", async () => {

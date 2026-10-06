@@ -1,11 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HttpError, httpJson } from "../http.js";
+import { GeoBlock, isGeoBlock } from "./geoblock.js";
 import type { Bar } from "../mechas/core.js";
 import { firstZipEntry } from "./zip.js";
 
 // 1-minute candles of Binance USDⓈ-M perpetuals for the wick hunter, plus what the coin selection needs.
-// Live: fapi.binance.com (works from Mexico). Where it refuses the country (the US, HTTP 451), the
+// Live: fapi.binance.com (works from Mexico). Where it refuses the country (the US, HTTP 451; also a phone
+// whose connection leaves through a VPN), it asks again every 30 minutes, and meanwhile the
 // spot market API stands in: same prices within a hair for coins listed on both, so the simulation
 // still runs, but perpetual-only coins drop out. History for backtests: data.binance.vision daily
 // zips, cached on disk (a past day never changes).
@@ -38,26 +40,35 @@ export interface MinuteSource {
 }
 
 export class FuturesMinutes implements MinuteSource {
-  /** False once fapi.binance.com refused this country: use spot prices instead, in every instance. */
-  private static liveOk = true;
+  /** Shared by every instance: one refusal speaks for the whole connection. */
+  static readonly block = new GeoBlock();
 
   constructor(
     private readonly cacheDir?: string,
     private readonly log: (msg: string) => void = () => {},
+    /** Also told (e.g. on Telegram) when futures stop or start answering. */
+    private readonly alert?: (msg: string) => void,
   ) {}
 
   get usingFutures(): boolean {
-    return FuturesMinutes.liveOk;
+    return !FuturesMinutes.block.isBlocked;
+  }
+
+  private warn(msg: string): void {
+    this.log(msg);
+    this.alert?.(msg);
   }
 
   private async get<T>(path: string, spotPath: string): Promise<T> {
-    if (FuturesMinutes.liveOk) {
+    const b = FuturesMinutes.block;
+    if (b.open) {
       try {
-        return await httpJson<T>(`${FAPI}${path}`);
+        const r = await httpJson<T>(`${FAPI}${path}`);
+        if (b.accept()) this.warn("Binance futuros responde de nuevo: el reto 2 vuelve a operar todas sus monedas.");
+        return r;
       } catch (err) {
-        if (!(err instanceof HttpError) || (err.status !== 451 && err.status !== 403)) throw err;
-        FuturesMinutes.liveOk = false;
-        this.log("Aviso: Binance futuros no responde desde este país (HTTP 451); el reto 2 usa precios del mercado spot");
+        if (!isGeoBlock(err)) throw err;
+        if (b.refuse()) this.warn(`Binance futuros respondió HTTP ${err.status}: no da servicio al país por el que sale la conexión. ¿Hay una VPN activa en el celular o estás fuera de México? Mientras tanto el reto 2 solo opera las monedas que también están en spot; lo vuelvo a intentar cada 30 minutos.`);
       }
     }
     return httpJson<T>(`${SPOT}${spotPath}`);
@@ -131,5 +142,5 @@ export class FuturesMinutes implements MinuteSource {
 
 /** For tests. */
 export function resetFuturesMinutes(): void {
-  (FuturesMinutes as unknown as { liveOk: boolean }).liveOk = true;
+  FuturesMinutes.block.reset();
 }

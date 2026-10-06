@@ -667,7 +667,7 @@ async function runTendencia(config: Config, days: number, until?: string): Promi
 }
 
 const mechasBot = (config: Config, notify: (text: string) => Promise<void>, onFirstTrade?: () => void) =>
-  new MechasBot({ config: config.mechas, source: new FuturesMinutes(join(config.dataDir, "velas1m"), log), notify, log, dir: join(config.dataDir, "mechas"), onFirstTrade });
+  new MechasBot({ config: config.mechas, source: new FuturesMinutes(join(config.dataDir, "velas1m"), log, (msg) => void notify(`⚠️ ${msg}`)), notify, log, dir: join(config.dataDir, "mechas"), onFirstTrade });
 
 async function runMechas(config: Config, days: number, manual?: string, until?: string): Promise<void> {
   const src = new FuturesMinutes(join(config.dataDir, "velas1m"), log);

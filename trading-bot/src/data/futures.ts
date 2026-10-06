@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HttpError, httpJson } from "../http.js";
+import { GeoBlock, isGeoBlock } from "./geoblock.js";
 import { firstZipEntry } from "./zip.js";
 
 // Binance USDⓈ-M futures positioning, every 5 minutes: open interest, top traders' and everyone's
@@ -56,14 +57,8 @@ export function parseMetricsCsv(csv: string): FuturesPoint[] {
 }
 
 export class FuturesSource {
-  /** False once fapi.binance.com refused us (geo-blocked): stop asking, in every instance. */
-  private static liveOk = true;
-  private get liveOk(): boolean {
-    return FuturesSource.liveOk;
-  }
-  private set liveOk(v: boolean) {
-    FuturesSource.liveOk = v;
-  }
+  /** fapi.binance.com refused the country (geo-blocked): asked again every 30 minutes, in every instance. */
+  static readonly block = new GeoBlock();
 
   constructor(
     private readonly cacheDir?: string,
@@ -102,7 +97,8 @@ export class FuturesSource {
 
   /** Recent points from fapi.binance.com (its history endpoints keep 30 days, 500 points per call). */
   private async live(symbol: string, since: number): Promise<FuturesPoint[]> {
-    if (!this.liveOk) return [];
+    const b = FuturesSource.block;
+    if (!b.open) return [];
     const q = `symbol=${symbol}&period=5m&limit=500&startTime=${since}`;
     try {
       const [oi, top, topPos, crowd, taker] = await Promise.all([
@@ -112,6 +108,7 @@ export class FuturesSource {
         httpJson<{ timestamp: number; longShortRatio: string }[]>(`${FAPI}/futures/data/globalLongShortAccountRatio?${q}`),
         httpJson<{ timestamp: number; buySellRatio: string }[]>(`${FAPI}/futures/data/takerlongshortRatio?${q}`),
       ]);
+      if (b.accept()) this.log("La API de futuros de Binance responde de nuevo.");
       const at = <T extends { timestamp: number }>(rows: T[]) => new Map(rows.map((r) => [r.timestamp, r]));
       const [mTop, mPos, mCrowd, mTaker] = [at(top), at(topPos), at(crowd), at(taker)];
       return oi.map((r) => ({
@@ -124,10 +121,8 @@ export class FuturesSource {
         takerRatio: num(mTaker.get(r.timestamp)?.buySellRatio),
       }));
     } catch (err) {
-      if (err instanceof HttpError && (err.status === 451 || err.status === 403)) {
-        const first = this.liveOk;
-        this.liveOk = false;
-        if (first) this.log(`La API de futuros de Binance no responde desde aquí (HTTP ${err.status}); se usa solo el archivo diario (hasta ayer).`);
+      if (isGeoBlock(err)) {
+        if (b.refuse()) this.log(`La API de futuros de Binance no responde desde aquí (HTTP ${err.status}); se usa solo el archivo diario (hasta ayer) y se vuelve a intentar cada 30 minutos.`);
         return [];
       }
       if (err instanceof HttpError && err.status === 400) return []; // no perpetual contract for this symbol
@@ -148,12 +143,12 @@ export class FuturesSource {
       }
       t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
     }
-    if (this.liveOk) {
+    if (FuturesSource.block.open) {
       try {
         const rows = await httpJson<{ fundingTime: number; fundingRate: string }[]>(`${FAPI}/fapi/v1/fundingRate?symbol=${symbol}&startTime=${Math.max(since, (out.at(-1)?.time ?? since) + 1)}&limit=1000`);
         out.push(...rows.map((r) => ({ time: r.fundingTime, rate: Number(r.fundingRate) })));
       } catch (err) {
-        if (err instanceof HttpError && (err.status === 451 || err.status === 403)) this.liveOk = false;
+        if (isGeoBlock(err)) FuturesSource.block.refuse();
         else if (!(err instanceof HttpError && err.status === 400)) throw err;
       }
     }
@@ -186,5 +181,5 @@ export function openInterestChange(candles: { time: number }[], futures: Futures
 
 /** For tests: ask the live API again. */
 export function resetFuturesLive(): void {
-  (FuturesSource as unknown as { liveOk: boolean }).liveOk = true;
+  FuturesSource.block.reset();
 }
