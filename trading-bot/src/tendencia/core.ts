@@ -1,10 +1,12 @@
-// Challenge 3, trend following on daily closes, after Zarattini, Pagani & Barbon (2025), "Catching Crypto
-// Trends": an ensemble of Donchian channels. For each lookback L a model enters when the close beats the
-// highest of the previous L closes and leaves when it falls under its trailing stop, the highest midpoint of
-// that channel since entry. A coin is held while at least `threshold` of the models are in a trend, with an
-// equal slot of the account; out of trend its slot waits in cash.
-// Measured here (README, Binance spot 2022 to Oct 2026, the 5 largest coins of Jan 2022, 50 USD, 0.15% per
-// side): +156%, worst drop -25%, against BTC +79% with a -67% drop; after the paper came out +9.8%.
+// Challenge 3, trend following on daily closes. Two signals:
+// - "medias" (in use since 2026-10-08): the share of moving averages (50, 100, 150, 200 and 250 days) the
+//   close is above sets how much of the coin's slot is held: 3 of 5 = 60%. On BTC alone it beat the
+//   channels below on two periods (README): 2019-21 +222% vs +152%, 2022-Oct 2026 +205% vs +137%.
+// - "canales": Zarattini, Pagani & Barbon (2025), "Catching Crypto Trends": for each lookback L a model
+//   enters when the close beats the highest of the previous L closes and leaves when it falls under its
+//   trailing stop, the highest midpoint of that channel since entry; the coin is held while at least
+//   `threshold` of the models are in a trend.
+// Each coin has an equal slot of the account; what is not held waits in cash.
 
 export interface DayBar {
   /** Start of the UTC day. */
@@ -73,6 +75,53 @@ export class TrendModel {
     return { on: this.state.filter((s, j) => s.on && has(this.lookbacks[j])).length, models: this.lookbacks.filter(has).length };
   }
 }
+
+/** The share of moving averages a coin's close is above, fed one daily close at a time. */
+export class AverageModel {
+  private readonly closes: number[] = [];
+  private last = NaN;
+
+  constructor(private readonly lengths: number[]) {}
+
+  static of(closes: number[], lengths: number[]): AverageModel {
+    const m = new AverageModel(lengths);
+    for (const c of closes) m.add(c);
+    return m;
+  }
+
+  add(close: number): void {
+    this.closes.push(close);
+    this.last = close;
+    const keep = Math.max(...this.lengths);
+    if (this.closes.length > keep * 2) this.closes.splice(0, this.closes.length - keep);
+  }
+
+  /** Averages that include the last close, like a chart's moving average. */
+  view(): TrendView {
+    const n = this.closes.length;
+    let on = 0;
+    let models = 0;
+    for (const len of this.lengths) {
+      if (n < len) continue;
+      let sum = 0;
+      for (let k = n - len; k < n; k++) sum += this.closes[k];
+      models++;
+      if (this.last > sum / len) on++;
+    }
+    return { on, models };
+  }
+}
+
+export interface SignalConfig {
+  signal: "medias" | "canales";
+  /** Moving-average lengths for "medias", in days. */
+  averages: number[];
+  /** Channel lookbacks for "canales", in days. */
+  lookbacks: number[];
+}
+
+/** A fresh model for one coin, of the configured kind. */
+export const makeModel = (c: SignalConfig): { add(close: number): void; view(): TrendView } => (c.signal === "medias" ? new AverageModel(c.averages) : new TrendModel(c.lookbacks));
 
 /** In a trend when at least `threshold` of the models with an opinion say so. */
 export const inTrend = (v: TrendView, threshold: number) => v.models > 0 && v.on / v.models >= threshold;
@@ -149,7 +198,11 @@ export function rebalance(cash: number, holdings: Record<string, Holding>, price
   return { cash, fills };
 }
 
-/** Equal slots for the coins in a trend, nothing for the rest. */
-export function trendWeights(views: Record<string, TrendView>, coins: string[], threshold: number): Record<string, number> {
-  return Object.fromEntries(coins.map((s) => [s, views[s] && inTrend(views[s], threshold) ? 1 / coins.length : 0]));
+/**
+ * Each coin's share of the account: an equal slot, filled in proportion to its models in a trend
+ * (`proportional`, the moving averages) or whole once `threshold` of them agree (the channels).
+ */
+export function trendWeights(views: Record<string, TrendView>, coins: string[], threshold: number, proportional = false): Record<string, number> {
+  const share = (v: TrendView | undefined) => (!v || !v.models ? 0 : proportional ? v.on / v.models : inTrend(v, threshold) ? 1 : 0);
+  return Object.fromEntries(coins.map((s) => [s, share(views[s]) / coins.length]));
 }

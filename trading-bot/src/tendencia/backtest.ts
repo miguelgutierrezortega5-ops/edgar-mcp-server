@@ -1,5 +1,5 @@
 import { TendenciaBot, type DailySource, type TendenciaConfig, type TrendTrade } from "./bot.js";
-import { TrendModel, type DayBar, type TrendView } from "./core.js";
+import { makeModel, type DayBar, type TrendView } from "./core.js";
 
 // Replays daily candles through the live bot's own daily step: decisions at each close, orders at the
 // next day's open, the account valued at each close. The trend models start well before `from`, so the
@@ -27,7 +27,7 @@ export async function backtestTendencia(config: TendenciaConfig, source: DailySo
     log(`  ${symbol}: ${bars.length} velas diarias`);
     series.set(symbol, new Map(bars.map((b) => [b.time, b])));
   }
-  const models = new Map(bot.symbols.map((s) => [s, new TrendModel(config.lookbacks)]));
+  const models = new Map(bot.symbols.map((s) => [s, makeModel(config)]));
   const equity: TendenciaBacktest["equity"] = [];
   const btc: TendenciaBacktest["btc"] = [];
   const btcBars = series.get(`BTC${config.quote}`)!;

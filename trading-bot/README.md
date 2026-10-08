@@ -147,7 +147,7 @@ Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env`, el bot avisa de cada op
 | `/actualizar` | Instala las mejoras nuevas del bot y lo reinicia con ellas |
 | `/informe` | Publica ya el informe detallado para Claude (ver abajo) |
 | `/mechas` | Reto 2: saldo, posiciones, qué tan bien acierta (predicción frente a realidad) y cómo van las variantes en la sombra |
-| `/tendencia` | Reto 3: saldo, qué monedas están en tendencia (cuántos de sus 9 plazos) y cuánto hay en cada una |
+| `/tendencia` | Reto 3: saldo, sobre cuántas de sus 5 medias está BTC y cuánto de la cuenta tiene en BTC |
 
 Los mensajes enviados mientras el bot estaba apagado se descartan, no se ejecutan.
 
@@ -274,23 +274,19 @@ Probarlo con datos recientes: `node dist/index.js mechas --config config.reto50.
 
 ## Reto 3: seguir tendencias (50 USD, velas diarias)
 
-Una tercera cuenta simulada de 50 USD, aparte de los retos 1 y 2, que hace lo contrario que ellos: en vez de comprar caídas y vender pronto con una ganancia pequeña, compra lo que ya sube y aguanta mientras la subida dure. Es la forma de operar de muchos de los bots y fondos con mejores resultados comprobables, que aciertan solo un 30-40% de las veces pero ganan mucho más en sus aciertos de lo que pierden en sus fallos. Corre en el mismo bot y el mismo Telegram (`/tendencia`) y te avisa de cada compra y venta. Se enciende con `"tendencia": { "enabled": true }` y ya viene encendido en `config.reto50.json`.
+Una tercera cuenta simulada de 50 USD, aparte de los retos 1 y 2, que hace lo contrario que ellos: en vez de comprar caídas y vender pronto con una ganancia pequeña, compra lo que ya sube y aguanta mientras la subida dure. Es la forma de operar de muchos de los bots y fondos con mejores resultados comprobables, que aciertan pocas veces pero ganan mucho más en sus aciertos de lo que pierden en sus fallos. Corre en el mismo bot y el mismo Telegram (`/tendencia`) y te avisa de cada compra y venta. Se enciende con `"tendencia": { "enabled": true }` y ya viene encendido en `config.reto50.json`.
 
-**Cómo opera.** Sigue BTC, ETH, BNB, SOL y ADA (las 5 más grandes de enero de 2022), cada una con una parte fija del 20% de la cuenta (10 USD al empezar, por encima del mínimo de 5 USD de Binance). Una vez al día, al cerrar las velas diarias (00:00 UTC, 18:00 en México), mira cada moneda con 9 plazos: 5, 10, 20, 30, 60, 90, 150, 250 y 360 días. En cada plazo, la moneda entra en tendencia cuando cierra por encima del cierre más alto de ese plazo, y sale cuando cae por debajo del punto medio del canal (entre el más alto y el más bajo), que solo sube mientras dura la tendencia. Si al menos 5 de los 9 plazos dicen "tendencia", la tiene; si no, su parte espera en efectivo. Es el método de Zarattini, Pagani y Barbon (2025, "Catching Crypto Trends"), sin ajustar nada, adaptado a una cuenta pequeña. Al usar solo velas diarias, aunque el celular se duerma o se reinicie, en cuanto despierta decide con el último cierre.
+**Cómo opera (desde el 8 de octubre de 2026).** Solo BTC, con 5 medias móviles de su precio: 50, 100, 150, 200 y 250 días. Una vez al día, al cerrar las velas diarias (00:00 UTC, 18:00 en México), cuenta sobre cuántas de ellas cerró BTC y tiene esa parte de la cuenta en BTC: 5 de 5 = todo, 3 de 5 = 60%, 0 de 5 = todo en efectivo. Solo mueve dinero cuando el cambio pasa de 5 USD (el mínimo de Binance). Al usar solo velas diarias, aunque el celular se duerma o se reinicie, en cuanto despierta decide con el último cierre. (`"signal": "medias"`, `"coins": ["BTC"]`.)
 
-**Lo que midió** (velas diarias de Binance, cuenta de 50 USD en efectivo, comisión 0.1% y deslizamiento 0.05% en cada compra y venta, decide al cierre y opera a la apertura siguiente):
+**Por qué así.** Empezó con otra regla, la de Zarattini, Pagani y Barbon (2025, "Catching Crypto Trends"): 9 canales de 5 a 360 días en BTC, ETH, BNB, SOL y ADA (`"signal": "canales"`). Al compararla con alternativas simples, ganó BTC con medias en los dos periodos, incluido uno que no se usó para elegir nada (2019 a 2021, con las 5 monedas más grandes de enero de 2019 para la regla anterior, para no favorecerla con monedas que se sabe que subieron):
 
-| Periodo | Reto 3 | BTC comprado y guardado |
-| --- | --- | --- |
-| 2022 (año bajista) | −6.1% (caída máx. −8%) | −65.3% (caída máx. −67%) |
-| 2023 | +64.3% | +155.6% |
-| 2024 | +47.0% | +121.3% |
-| 2025 | +3.6% | −6.3% |
-| 2026 hasta el 3 de octubre | +1.0% | −3.3% |
-| **2022 a octubre de 2026** | **+136.9%, caída máx. −25%** | +77.6%, caída máx. −67% |
-| Desde que se publicó el método (abril 2025 a octubre 2026) | +10.9%, caída máx. −17% | −0.5%, caída máx. −53% |
+| Periodo (cuenta de 50 USD en efectivo, 0.15% por compra o venta, decide al cierre y opera a la apertura siguiente) | BTC con 5 medias (actual) | 5 monedas con canales (anterior) | BTC comprado y guardado |
+| --- | --- | --- | --- |
+| Agosto 2019 a 2021 (no usado) | **+224.5%**, caída máx. −43% | +151.6%, caída máx. −49% | +345.5%, caída máx. −60% |
+| 2022 a octubre de 2026 | **+204.1%**, caída máx. −30% | +136.9%, caída máx. −25% | +77.6%, caída máx. −67% |
+| Abril 2025 a octubre 2026 | +23.5% | +10.9% | −0.5% |
 
-Sale de 160 tendencias en ese tiempo: solo el 34% acaban con ganancia, pero ganan de media 2.07 USD y las otras pierden 0.69 USD. Con otras variantes (4 o 6 monedas, umbral de 3 o 7 de 9 plazos, comisión de 0.25%) dio entre +89% y +140% en el total y entre +7% y +17% después de publicarse, así que no depende de un ajuste fino. Ojo: en los años alcistas gana menos que guardar BTC (se sale en las correcciones), pierde poco en los bajistas y en los años sin tendencia queda casi plano. Puede caer un 25% en el camino.
+Por año, la regla actual: 2020 +206.5%, 2021 +32.2%, 2022 −18.1%, 2023 +93.8%, 2024 +76.6%, 2025 −5.8%, 2026 hasta el 3 de octubre +15.2%. Con una sola media también ganó a guardar BTC en 2022-2026, pero dependía mucho de cuál: la de 200 días dio +252% ahí y solo +55% en 2019-2021; promediar las 5 evita depender de una. Lo que se pierde: en años de subida limpia (2020, 2023) gana menos que guardar BTC, porque sale en las correcciones; lo que se gana: en las caídas largas (2022, 2025) se queda fuera casi todo el camino. Las monedas pequeñas, en promedio, rindieron menos que BTC en estos ciclos y muchas desaparecen; por eso solo BTC.
 
 Probarlo: `node dist/index.js tendencia --config config.reto50.json --dias 365` (con `--hasta 2026-09-30` termina en esa fecha).
 

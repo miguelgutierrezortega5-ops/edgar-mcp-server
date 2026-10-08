@@ -657,11 +657,11 @@ async function runTendencia(config: Config, days: number, until?: string): Promi
     console.log(`${name.padEnd(8)} ${stats(r.equity, a, b, before(r.equity) ?? config.tendencia.startingBalance).padEnd(30)} ${stats(r.btc, a, b, before(r.btc) ?? config.tendencia.startingBalance)}`);
   }
   console.log(`${"Todo".padEnd(8)} ${stats(r.equity, first, end + DAY, config.tendencia.startingBalance).padEnd(30)} ${stats(r.btc, first, end + DAY, config.tendencia.startingBalance)}`);
-  const sells = r.trades.filter((t) => t.reason === "sale");
+  const sells = r.trades.filter((t) => t.side === "sell");
   const wins = sells.filter((t) => (t.pnl ?? 0) > 0);
   const sum = (xs: typeof sells) => xs.reduce((a, t) => a + (t.pnl ?? 0), 0);
   console.log(`\nCuenta: ${fmt.money(config.tendencia.startingBalance, "USD")} → ${fmt.money(r.equity.at(-1)!.value, "USD")}. Órdenes: ${r.trades.length}, comisiones ${fmt.money(r.trades.reduce((a, t) => a + t.fee, 0), "USD")}.`);
-  if (sells.length) console.log(`Salidas de tendencia: ${sells.length}, ganadoras ${wins.length} (${((wins.length / sells.length) * 100).toFixed(0)}%): ganan de media ${fmt.money(sum(wins) / (wins.length || 1), "USD")} y las perdedoras pierden ${fmt.money(-sum(sells.filter((t) => (t.pnl ?? 0) <= 0)) / (sells.length - wins.length || 1), "USD")} (pocas grandes ganancias pagan muchas pérdidas chicas).`);
+  if (sells.length) console.log(`Ventas: ${sells.length}, ganadoras ${wins.length} (${((wins.length / sells.length) * 100).toFixed(0)}%): ganan de media ${fmt.money(sum(wins) / (wins.length || 1), "USD")} y las perdedoras pierden ${fmt.money(-sum(sells.filter((t) => (t.pnl ?? 0) <= 0)) / (sells.length - wins.length || 1), "USD")} (pocas grandes ganancias pagan muchas pérdidas chicas).`);
   console.log(`\n${r.bot.summary()}`);
   console.log("\nOjo: un backtest no garantiza resultados futuros. En años sin tendencia (2022, inicio de 2025) perdió un poco; gana cuando hay subidas largas.");
 }

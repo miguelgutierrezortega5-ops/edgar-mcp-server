@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { backtestTendencia } from "../dist/tendencia/backtest.js";
 import { TendenciaBot } from "../dist/tendencia/bot.js";
-import { inTrend, rebalance, TrendModel, trendWeights } from "../dist/tendencia/core.js";
+import { AverageModel, inTrend, makeModel, rebalance, TrendModel, trendWeights } from "../dist/tendencia/core.js";
 import { loadConfig } from "../dist/config.js";
 
 const DAY = 86_400_000;
@@ -27,6 +27,17 @@ test("each lookback enters on a close above its channel and leaves under the cha
   assert.deepEqual(m.view(), { on: 0, models: 3 });
   assert.equal(inTrend({ on: 5, models: 9 }, 0.5), true);
   assert.equal(inTrend({ on: 4, models: 9 }, 0.5), false);
+});
+
+test("moving averages: the share of averages under the close sets how much of the slot is held", () => {
+  const m = AverageModel.of([...Array.from({ length: 20 }, () => 100), ...Array.from({ length: 10 }, (_, i) => 101 + i)], [5, 10, 20, 50]);
+  assert.deepEqual(m.view(), { on: 3, models: 3 }); // the 50-day average has no opinion yet
+  m.add(103); // under the 5-day average (106.4) and the 10-day (105.8), above the 20-day (102.9)
+  assert.deepEqual(m.view(), { on: 1, models: 3 });
+  assert.deepEqual(trendWeights({ BTCUSDT: { on: 3, models: 5 } }, ["BTCUSDT"], 0.5, true), { BTCUSDT: 0.6 });
+  assert.deepEqual(trendWeights({ BTCUSDT: { on: 3, models: 5 } }, ["BTCUSDT"], 0.5, false), { BTCUSDT: 1 });
+  assert.ok(makeModel({ signal: "medias", averages: [5], lookbacks: [5] }) instanceof AverageModel);
+  assert.ok(makeModel({ signal: "canales", averages: [5], lookbacks: [5] }) instanceof TrendModel);
 });
 
 test("rebalancing fills equal slots, never spends cash it does not have, skips orders under the minimum and books each sale", () => {
@@ -115,6 +126,27 @@ test("the bot acts once per closed day, tells Telegram what it bought, keeps its
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a coin taken off the list is sold at the next close, and the averages size the rest", async () => {
+  const src = market();
+  let now = T0 + 5 * 60_000;
+  const sent = [];
+  const make = (over) => new TendenciaBot({ config: config(over), source: src, notify: async (t) => void sent.push(t), log: () => {}, now: () => now });
+  const bot = make({ coins: ["BTC", "ETH"] });
+  await bot.tick();
+  assert.equal(Object.keys(bot.state.holdings).length, 2);
+  const moved = make({ coins: ["BTC"], signal: "medias" });
+  moved.state = bot.state; // same account, new rules
+  now = T0 + DAY + 5 * 60_000;
+  await moved.tick();
+  const sold = moved.state.trades.filter((t) => t.time === now);
+  assert.ok(sold.some((t) => t.symbol === "ETHUSDT" && t.side === "sell" && t.reason === "sale"));
+  assert.ok(sold.some((t) => t.symbol === "BTCUSDT" && t.side === "buy")); // 5 of 5 averages: the whole account
+  assert.deepEqual(Object.keys(moved.state.holdings), ["BTCUSDT"]);
+  assert.ok(moved.state.cash < 1);
+  assert.match(sent.at(-1), /tendencia en 5 de 5 medias/);
+  assert.match(moved.summary(), /BTC: en tendencia \(5 de 5 medias: 100% de su parte\)/);
 });
 
 test("the backtest replays the same daily step: decisions at the close, orders at the next open", async () => {

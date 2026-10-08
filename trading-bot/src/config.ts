@@ -198,9 +198,13 @@ const configSchema = z
         /** One equal slot each (5 x 20% keeps every order above Binance's 5 USD minimum at 50 USD). */
         coins: z.array(z.string().min(1)).min(1).default(["BTC", "ETH", "BNB", "SOL", "ADA"]),
         quote: z.string().default("USDT"),
-        /** Donchian lookbacks of the ensemble, in days (as published). */
+        /** "medias": hold the share of each slot that the moving averages above the close say; "canales": the Donchian ensemble, all or nothing. */
+        signal: z.enum(["medias", "canales"]).default("canales"),
+        /** Moving-average lengths for "medias", in days. */
+        averages: z.array(z.number().int().positive()).min(1).default([50, 100, 150, 200, 250]),
+        /** Donchian lookbacks of the ensemble for "canales", in days (as published). */
         lookbacks: z.array(z.number().int().positive()).min(1).default([5, 10, 20, 30, 60, 90, 150, 250, 360]),
-        /** Share of the lookbacks that must be in a trend to hold the coin. */
+        /** Share of the lookbacks that must be in a trend to hold the coin ("canales"). */
         threshold: z.number().gt(0).max(1).default(0.5),
         minOrderUsd: z.number().min(0).default(5),
         feePct: z.number().min(0).default(0.1),

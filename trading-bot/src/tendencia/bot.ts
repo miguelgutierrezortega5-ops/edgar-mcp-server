@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from "node:path";
 import * as fmt from "../fmt.js";
 import type { Notifier } from "../notify.js";
-import { inTrend, rebalance, TrendModel, trendWeights, type DayBar, type Fill, type Holding, type TrendView } from "./core.js";
+import { inTrend, makeModel, rebalance, trendWeights, type DayBar, type Fill, type Holding, type TrendView } from "./core.js";
 
 // Challenge 3 as a running bot: its own simulated spot account. Once a day, after the daily candles close
 // (00:00 UTC, 18:00 in Mexico City), it rebuilds each coin's trend from the closes and moves the account to
@@ -14,6 +14,8 @@ export interface TendenciaConfig {
   startingBalance: number;
   coins: string[];
   quote: string;
+  signal: "medias" | "canales";
+  averages: number[];
   lookbacks: number[];
   threshold: number;
   minOrderUsd: number;
@@ -84,6 +86,11 @@ export class TendenciaBot {
     return (this.d.now ?? Date.now)();
   }
 
+  /** What the trend count is out of, in messages. */
+  private get unit(): string {
+    return this.d.config.signal === "medias" ? "medias" : "plazos";
+  }
+
   get symbols(): string[] {
     return this.d.config.coins.map((c) => `${c.toUpperCase()}${this.d.config.quote}`);
   }
@@ -113,7 +120,8 @@ export class TendenciaBot {
   step(day: number, views: Record<string, TrendView>, prices: Record<string, number>, at: number): TrendTrade[] {
     const c = this.d.config;
     const s = this.state;
-    const weights = trendWeights(views, this.symbols, c.threshold);
+    // Coins no longer in the list (the list changed) are sold at their price.
+    const weights = { ...Object.fromEntries(Object.keys(s.holdings).map((sym) => [sym, 0])), ...trendWeights(views, this.symbols, c.threshold, c.signal === "medias") };
     const r = rebalance(s.cash, s.holdings, prices, weights, { minOrderUsd: c.minOrderUsd, cost: (c.feePct + c.slippagePct) / 100 });
     s.cash = r.cash;
     for (const [sym, h] of Object.entries(s.holdings)) if (!h.units) delete s.holdings[sym];
@@ -140,9 +148,9 @@ export class TendenciaBot {
     for (const t of trades) {
       const v = views[t.symbol];
       const coin = short(t.symbol);
-      if (t.reason === "entra") lines.push(`• compra ${coin}: ${usd(t.notional)} a ${fmt.price(t.price)} (tendencia en ${v?.on} de ${v?.models} plazos)`);
+      if (t.reason === "entra") lines.push(`• compra ${coin}: ${usd(t.notional)} a ${fmt.price(t.price)} (tendencia en ${v?.on} de ${v?.models} ${this.unit})`);
       else if (t.reason === "sale") lines.push(`• vende ${coin}: ${usd(t.notional)} a ${fmt.price(t.price)}, ${(t.pnl ?? 0) >= 0 ? "gana" : "pierde"} ${usd(Math.abs(t.pnl ?? 0))} (${fmt.pct(((t.pnl ?? 0) / (t.notional - (t.pnl ?? 0))) * 100)}): salió de la tendencia`);
-      else lines.push(`• ${t.side === "buy" ? "completa" : "recorta"} ${coin} a su parte: ${t.side === "buy" ? "compra" : "vende"} ${usd(t.notional)} a ${fmt.price(t.price)}`);
+      else lines.push(`• ${t.side === "buy" ? "sube" : "baja"} ${coin}${v ? ` (tendencia en ${v.on} de ${v.models} ${this.unit})` : ""}: ${t.side === "buy" ? "compra" : "vende"} ${usd(t.notional)} a ${fmt.price(t.price)}`);
     }
     const s = this.state;
     lines.push(`Reto 3: ${usd(this.value())} (${fmt.pct((this.value() / s.startingBalance - 1) * 100)} desde ${usd(s.startingBalance)})`);
@@ -166,7 +174,8 @@ export class TendenciaBot {
     if (!due && now - this.state.pricesAt < PRICES_MS) return;
     const views: Record<string, TrendView> = {};
     const prices: Record<string, number> = {};
-    for (const symbol of this.symbols) {
+    const wanted = new Set(this.symbols);
+    for (const symbol of [...new Set([...this.symbols, ...Object.keys(this.state.holdings)])]) {
       let bars: DayBar[];
       try {
         bars = await this.d.source.days(symbol, due ? today - HISTORY_DAYS * DAY : closedDay);
@@ -183,7 +192,11 @@ export class TendenciaBot {
         return;
       }
       prices[symbol] = last.close;
-      if (due) views[symbol] = TrendModel.of(closed.map((b) => b.close), this.d.config.lookbacks).view();
+      if (due && wanted.has(symbol)) {
+        const m = makeModel(this.d.config);
+        for (const b of closed) m.add(b.close);
+        views[symbol] = m.view();
+      }
     }
     if (this.failingSince) this.d.log(`Reto 3: velas diarias de nuevo tras ${Math.round((now - this.failingSince) / MINUTE)} min`);
     this.failingSince = undefined;
@@ -216,11 +229,12 @@ export class TendenciaBot {
     const value = this.value();
     const lines = [`📈 Reto 3, seguir tendencias: ${usd(value)} (${fmt.pct((value / s.startingBalance - 1) * 100)} desde ${usd(s.startingBalance)})`];
     if (!s.lastDay) lines.push("Todavía no revisa su primer cierre diario.");
-    for (const symbol of this.symbols) {
+    for (const symbol of [...new Set([...this.symbols, ...Object.keys(s.holdings)])]) {
       const v = s.views[symbol];
       const h = s.holdings[symbol];
       const price = s.prices[symbol];
-      const trend = v ? `${inTrend(v, c.threshold) ? "en tendencia" : "sin tendencia"} (${v.on} de ${v.models} plazos)` : "sin datos aún";
+      const medias = c.signal === "medias";
+      const trend = !this.symbols.includes(symbol) ? "ya no está en la lista, se vende en el próximo cierre" : v ? `${medias ? (v.on ? "en tendencia" : "sin tendencia") : inTrend(v, c.threshold) ? "en tendencia" : "sin tendencia"} (${v.on} de ${v.models} ${this.unit}${medias && v.models ? `: ${Math.round((v.on / v.models) * 100)}% de su parte` : ""})` : "sin datos aún";
       const held = h?.units && price ? `${usd(h.units * price)} (${fmt.pct(((h.units * price) / h.cost - 1) * 100)})` : "en efectivo";
       lines.push(`${short(symbol)}: ${trend}, ${held}`);
     }

@@ -110,6 +110,6 @@
     "enabled": true
   },
   "mechas": { "enabled": true, "shorts": false },
-  "tendencia": { "enabled": true },
+  "tendencia": { "enabled": true, "coins": ["BTC"], "signal": "medias" },
   "updates": { "auto": true, "checkHours": 1 }
 }
