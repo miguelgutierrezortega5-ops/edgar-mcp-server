@@ -109,7 +109,7 @@
   "telegram": {
     "enabled": true
   },
-  "mechas": { "enabled": true },
+  "mechas": { "enabled": true, "shorts": false },
   "tendencia": { "enabled": true },
   "updates": { "auto": true, "checkHours": 1 }
 }
