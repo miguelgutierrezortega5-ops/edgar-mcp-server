@@ -284,6 +284,39 @@ test("without connection no minute is processed until its candles arrive, so an 
   assert.ok(logs.some((l) => /velas de nuevo tras 5 min/.test(l)));
 });
 
+test("a coin left out while the rest go on (perpetual-only during a 451) exits where it hit, once its candles return", async () => {
+  // Minute 302 fills a buy in X; minute 305 reaches the target, but X's candles stop loading at 304
+  // (the leaders keep loading) and only come back at 319.
+  const mkt = market((i) => (i === 302 ? bar(T0 + i * MIN, 100, 100.1, 95, 97) : i > 302 && i < 305 ? bar(T0 + i * MIN, 97, 97.5, 96.5, 97) : i >= 305 ? bar(T0 + i * MIN, 101, 101.5, 100.5, 101) : null));
+  let now;
+  let xDown = false;
+  const source = {
+    minutes: async (s, since, n) => {
+      if (xDown && s === "XUSDT") throw new Error("Invalid symbol");
+      return Array.from({ length: 400 }, (_, i) => mkt.bar(s, i)).filter((b) => b.time >= since && b.time + MIN <= n);
+    },
+    coins: async () => [],
+    days: async () => [],
+  };
+  const bot = new MechasBot({ config: config({ shorts: false }), source, notify: async () => {}, log: () => {}, now: () => now });
+  bot.setCoins([{ symbol: "XUSDT", range: 0.2, tick: 0 }], T0);
+  const tickAt = async (i) => {
+    now = T0 + (i + 1) * MIN + 3_000;
+    await bot.tick();
+  };
+  for (let i = 300; i <= 303; i++) await tickAt(i);
+  assert.equal(bot.state.positions.length, 1);
+  xDown = true;
+  for (let i = 304; i <= 318; i++) await tickAt(i);
+  assert.ok(bot.state.lastMinute >= T0 + 314 * MIN); // after 10 minutes the rest went on without X
+  assert.equal(bot.state.positions.length, 1);
+  xDown = false;
+  await tickAt(319);
+  assert.equal(bot.state.closed.length, 1);
+  assert.equal(bot.state.closed[0].reason, "objetivo");
+  assert.equal(bot.state.closed[0].closedAt, T0 + 305 * MIN);
+});
+
 test("with the default rule a side pauses on evidence of losses, not on mere doubt", () => {
   const c = { ...learnCfg, halfLifeDays: DEFAULTS.halfLifeDays, minProbability: DEFAULTS.minProbability, priorMean: DEFAULTS.priorMeanPct / 100, priorWinRate: DEFAULTS.priorWinRate };
   const now = T0 + 40 * 3_600_000;

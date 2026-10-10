@@ -210,6 +210,14 @@ export class MechasBot {
     return undefined;
   }
 
+  /** The coin's candles after `after` up to `t`, oldest first. */
+  private barsAfter(symbol: string, after: number, t: number): Bar[] {
+    const bars = this.bars.get(symbol) ?? [];
+    let i = bars.length;
+    while (i > 0 && bars[i - 1].time > after) i--;
+    return bars.slice(i).filter((b) => b.time <= t);
+  }
+
   private closesUpTo(symbol: string, t: number, n: number): number[] {
     const bars = this.bars.get(symbol) ?? [];
     let end = bars.length;
@@ -262,10 +270,15 @@ export class MechasBot {
   processMinute(t: number, live: boolean, placeFrom = t + MINUTE): boolean {
     const p = this.p;
     for (const pos of [...this.state.positions]) {
-      const bar = this.barAt(pos.symbol, t);
-      if (!bar || bar.time <= pos.openedAt) continue;
-      const done = advance(pos, bar, this.paramsFor(pos.side));
-      if (done) this.settle(pos, done);
+      // Every candle since the entry, not just this minute's: a coin whose candles came back late (left out
+      // while the rest went on) exits where its stop, target or time was reached, not when the phone saw it.
+      // Candles that did not close the position before do not close it now, so going over them is harmless.
+      for (const bar of this.barsAfter(pos.symbol, pos.openedAt, t)) {
+        const done = advance(pos, bar, this.paramsFor(pos.side));
+        if (!done) continue;
+        this.settle(pos, done);
+        break;
+      }
     }
     const last = (o: Order) => o.until ?? o.forTime;
     const resting = this.state.pending.filter((o) => o.forTime <= t && t <= last(o));
