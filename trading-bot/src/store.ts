@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PaperBook } from "./brokers/paper.js";
+import type { HorariaState } from "./horaria/hourly.js";
 import { newProtectionState, type ProtectionState } from "./protections.js";
 import type { RiskState } from "./risk.js";
 import type { AssetClass, ClosedTrade, Position } from "./types.js";
@@ -8,7 +9,7 @@ import type { AssetClass, ClosedTrade, Position } from "./types.js";
 export interface BotState {
   version: 1;
   /** One simulated account per asset class, as real crypto and forex accounts are separate. */
-  papers: Record<AssetClass, PaperBook & { startingBalance: number }>;
+  papers: Record<AssetClass, PaperBook & { startingBalance: number; /** Last `paper.topUp` applied. */ topUp?: string }>;
   positions: Position[];
   /** Start time of the last closed bar evaluated, per market. */
   lastBar: Record<string, number>;
@@ -18,6 +19,8 @@ export interface BotState {
   protections: ProtectionState;
   /** Set from Telegram (/pausa): no new trades until /reanudar. */
   manualPause?: boolean;
+  /** Challenge 1's hourly trade. */
+  horaria?: HorariaState;
 }
 
 const newBook = (balance: number) => ({ balance, startingBalance: balance, nextId: 1 });

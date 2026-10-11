@@ -6,10 +6,11 @@ import type { Command, Notifier } from "./notify.js";
 import { contexts, describeArm, scaleFor, type AdaptiveState } from "./adaptive.js";
 import type { FuturesPoint } from "./data/futures.js";
 import { committedCash } from "./brokers/paper.js";
+import type { HourAction, Horaria } from "./horaria/hourly.js";
 import { blocked, onClose } from "./protections.js";
 import { averageBarValue, canOpen, newRiskState, positionSize, updateRisk } from "./risk.js";
 import { checkStops, trailStop, type Bar } from "./stops.js";
-import type { BotState, Store } from "./store.js";
+import { paperName, type BotState, type Store } from "./store.js";
 import { minCandles, needsReference, referenceMarket, signalAt, type Entry, type Signal } from "./strategy.js";
 import { closedCandles, mergeCandles, TIMEFRAME_MS } from "./timeframes.js";
 import type { AssetClass, Candle, ClosedTrade, Market, Position, PriceMark } from "./types.js";
@@ -35,9 +36,11 @@ export interface BotDeps {
   adaptive?: () => AdaptiveState | null;
   /** Binance futures positioning of a market since a time (absent when not available). */
   futures?: (m: Market, since: number) => Promise<FuturesPoint[]>;
+  /** Challenge 1's hourly trade (absent = off). */
+  hourly?: Horaria;
 }
 
-export const COMMAND_HELP = "/estado — saldo, posiciones y pausas\n/pausa — no abrir operaciones nuevas\n/reanudar — quitar pausas y paradas por pérdidas\n/cerrar SIMBOLO|todo — cerrar a mercado\n/mechas — reto 2, cazador de mechas\n/tendencia — reto 3, seguir tendencias\n/actualizar — instalar las mejoras nuevas del bot\n/informe — publicar el informe detallado para Claude\n/ayuda";
+export const COMMAND_HELP = "/estado — saldo, posiciones y pausas\n/pausa — no abrir operaciones nuevas\n/reanudar — quitar pausas y paradas por pérdidas\n/cerrar SIMBOLO|todo — cerrar a mercado\n/mechas — reto 2, cazador de mechas\n/tendencia — reto 3, seguir tendencias\n/horaria — reto 1, la operación de cada hora\n/actualizar — instalar las mejoras nuevas del bot\n/informe — publicar el informe detallado para Claude\n/ayuda";
 
 const MAX_RECENT_TRADES = 100;
 
@@ -158,7 +161,7 @@ export class Bot {
     for (const p of this.state.positions) {
       const mark = this.marks.get(p.marketId);
       const change = mark ? ((mark.price - p.entryPrice) / p.entryPrice) * 100 * (p.side === "long" ? 1 : -1) : NaN;
-      lines.push(`• ${p.symbol} ${fmt.side(p.side)} ${fmt.pct(change)} (stop ${fmt.price(p.stop)})`);
+      lines.push(p.kind === "horaria" ? `• ${p.symbol} ${fmt.side(p.side)} ${fmt.pct(change)} (operación de cada hora, se revisa en la próxima hora)` : `• ${p.symbol} ${fmt.side(p.side)} ${fmt.pct(change)} (stop ${fmt.price(p.stop)})`);
     }
     if (!this.state.positions.length) lines.push("Sin posiciones abiertas.");
     const day = new Date(now).toISOString().slice(0, 10);
@@ -225,6 +228,14 @@ export class Bot {
         await this.fail(m.id, err);
       }
     }
+    if (this.d.hourly?.due(now)) {
+      try {
+        await this.hourlyRound(this.d.hourly, now);
+        this.recovered("operación horaria");
+      } catch (err) {
+        await this.fail("operación horaria", err);
+      }
+    }
     this.d.store.save(this.state);
     if (now - this.lastHeartbeat >= 15 * 60_000) {
       this.lastHeartbeat = now;
@@ -241,10 +252,25 @@ export class Bot {
       this.equity.delete(broker.name);
       return;
     }
-    const equity = await broker.equity(this.state.positions, this.marks);
+    let equity = await broker.equity(this.state.positions, this.marks);
+    const risk = (this.state.risk[broker.name] ??= newRiskState(equity, now));
+    const top = this.d.config.paper.topUp;
+    const book = this.state.papers.crypto;
+    if (top && broker.name === paperName("crypto") && book.topUp !== top.id) {
+      // The owner adds (or takes out) simulated money: the account is worth `to` from here on.
+      const added = top.to - equity;
+      book.balance += added;
+      book.startingBalance = top.to;
+      book.topUp = top.id;
+      equity = top.to;
+      Object.assign(risk, newRiskState(equity, now));
+      const ccy = this.d.config.accountCurrency;
+      const msg = `💵 Reto 1: la cuenta simulada pasa a ${fmt.money(top.to, ccy)} (${added >= 0 ? "se añadieron" : "se retiraron"} ${fmt.money(Math.abs(added), ccy)}). Sus resultados se cuentan desde aquí.`;
+      this.d.log(msg);
+      await this.d.notify(msg);
+    }
     this.equity.set(broker.name, equity);
     this.recovered(broker.name);
-    const risk = (this.state.risk[broker.name] ??= newRiskState(equity, now));
     if (updateRisk(risk, this.d.config.risk, equity, now)) {
       const msg = `⛔ ${broker.name}: trading detenido por ${risk.halted}. Cierro sus posiciones. Reanuda con "npm run status -- --reanudar".`;
       this.d.log(msg);
@@ -263,7 +289,8 @@ export class Bot {
   private async processMarket(m: Market, candles: Candle[], now: number): Promise<void> {
     const broker = this.broker(m);
     const mark = this.marks.get(m.id)!;
-    let pos = this.state.positions.find((p) => p.marketId === m.id && p.broker === broker.name);
+    // The hourly trade has its own rules (hourlyRound): the strategy neither sees nor manages it.
+    let pos = this.state.positions.find((p) => p.marketId === m.id && p.broker === broker.name && !p.kind);
 
     // Stops the bot watches itself: bars since the stop was set, then the latest price.
     if (pos && !broker.managesStops) {
@@ -320,7 +347,7 @@ export class Bot {
     const equity = this.equity.get(broker.name);
     if (equity === undefined) return this.d.log(`${label} ignorada: no se pudo valorar la cuenta ${broker.name}`);
     const risk = (this.state.risk[broker.name] ??= newRiskState(equity, now));
-    const open = this.state.positions.filter((p) => p.broker === broker.name).length;
+    const open = this.state.positions.filter((p) => p.broker === broker.name && !p.kind).length;
     const check = canOpen(risk, this.d.config.risk, equity, open);
     if (!check.ok) return this.d.log(`${label} ignorada: ${check.reason}`);
     const guard = blocked(this.state.protections, m.id, now);
@@ -340,7 +367,9 @@ export class Bot {
       barValue: averageBarValue(closed),
     });
     // Spot has no leverage: never commit more cash than the account has free.
-    const free = m.type === "crypto" ? (equity - committedCash(this.state.positions.filter((p) => p.broker === broker.name), (p) => this.marks.get(p.marketId))) / (mark.price * mark.rate) : Infinity;
+    // ...and keep the hourly trade's money free when it is not holding a coin right now.
+    const reserve = this.d.hourly && !this.state.positions.some((p) => p.kind === "horaria") ? this.d.config.horaria.orderUsd * 1.01 : 0;
+    const free = m.type === "crypto" ? (equity - reserve - committedCash(this.state.positions.filter((p) => p.broker === broker.name), (p) => this.marks.get(p.marketId))) / (mark.price * mark.rate) : Infinity;
     const units = broker.normalizeUnits(m, Math.min(size, free * 0.995), mark.price);
     if (!(units > 0)) return this.d.log(`${label} ignorada: el tamaño (${size.toPrecision(3)}) queda por debajo del mínimo del mercado`);
 
@@ -367,6 +396,58 @@ export class Bot {
     await this.d.notify(msg);
   }
 
+  /**
+   * Challenge 1's hourly trade, once per hour: the coin most likely to beat its costs over the next hour is
+   * bought with `horaria.orderUsd`, or kept when it is the one already held; the previous one is sold. Neither
+   * the learner's pauses nor the protections stop it (the owner asked for a trade every hour); /pausa does.
+   */
+  private async hourlyRound(h: Horaria, now: number): Promise<void> {
+    const markets = this.d.markets.filter((m) => m.type === "crypto");
+    if (!markets.length) return;
+    const decision = await h.decide(now, markets);
+    if (!decision) return;
+    const ccy = this.d.config.accountCurrency;
+    const pick = decision.ranking.find((r) => this.marks.has(r.market.id));
+    const shown = pick ?? decision.ranking[0];
+    let held = this.state.positions.find((p) => p.kind === "horaria");
+    // /pausa, or the drawdown breaker if one is configured, stop it too.
+    const stopped = this.state.manualPause || !!this.state.risk[paperName("crypto")]?.halted;
+    let action: HourAction;
+    if (held && pick && held.marketId === pick.market.id && !stopped) action = "mantiene";
+    else {
+      const m = held && this.marketById.get(held.marketId);
+      const mark = held && this.marks.get(held.marketId);
+      if (held && m && mark) await this.closePosition(held, m, stopped || !pick ? "fin de su hora" : `cambia a ${pick.market.base}`, mark.price, now);
+      held = this.state.positions.find((p) => p.kind === "horaria"); // still there when its price did not load
+      if (stopped) action = "pausa";
+      else if (!pick || held) action = "sin precio";
+      else action = (await this.openHourly(pick.market, now)) ? "compra" : "sin dinero";
+    }
+    const others = decision.ranking.filter((r) => r !== shown).slice(0, 3).map((r) => `${r.market.base} ${(r.p * 100).toFixed(0)}%`).join(", ");
+    const what = action === "compra" ? `compra ${pick!.market.base}` : action === "mantiene" ? `se queda con ${pick!.market.base}` : `no opera (${action})`;
+    this.d.log(`⏱️ Operación horaria ${fmt.time(decision.hour)} UTC: ${what}${shown ? ` (probabilidad ${(shown.p * 100).toFixed(0)}%; siguientes: ${others})` : ""}`);
+    const daily = h.done(decision.hour, shown?.market.symbol ?? "", shown?.p ?? NaN, action, this.equity.get(paperName("crypto")), ccy);
+    if (daily) await this.d.notify(daily);
+  }
+
+  /** Buys `horaria.orderUsd` of `m` for the hourly trade; false when the free cash cannot pay the minimum. */
+  private async openHourly(m: Market, now: number): Promise<boolean> {
+    const broker = this.broker(m);
+    const mark = this.marks.get(m.id)!;
+    const mine = this.state.positions.filter((p) => p.broker === broker.name);
+    const free = (await broker.equity(mine, this.marks)) - committedCash(mine, (p) => this.marks.get(p.marketId));
+    // A hair above the amount so rounding the units never drops it under the exchange's minimum.
+    const usd = Math.min(this.d.config.horaria.orderUsd * 1.001, free * 0.995);
+    const units = broker.normalizeUnits(m, usd / (mark.price * mark.rate), mark.price);
+    if (!(units > 0)) return false;
+    // No stop: it is sold (or kept) at the next hour's decision.
+    const pos = await broker.open({ market: m, side: "long", units, price: mark.price, rate: mark.rate, stopDistance: mark.price, takeProfitDistance: null, time: now });
+    pos.kind = "horaria";
+    this.state.positions.push(pos);
+    this.d.log(`⏱️ Operación horaria: compra ${pos.units} ${m.base} a ${fmt.price(pos.entryPrice)} (${fmt.money(pos.units * pos.entryPrice * mark.rate, this.d.config.accountCurrency)})`);
+    return true;
+  }
+
   private async closePosition(pos: Position, m: Market, reason: string, price: number, now: number): Promise<void> {
     const mark = this.marks.get(m.id);
     const rate = mark ? (mark.price === price ? mark.rate : await quoteRate(m, price, this.d.config.accountCurrency, this.d.fx)) : 1;
@@ -376,6 +457,13 @@ export class Bot {
 
   private async recordClose(t: ClosedTrade): Promise<void> {
     this.state.positions = this.state.positions.filter((p) => p.id !== t.id);
+    if (t.kind === "horaria") {
+      // One a hour: logged and summed up once a day, not a Telegram message each.
+      this.d.store.appendTrade(t);
+      this.d.hourly?.closed(t);
+      this.d.log(`⏱️ Operación horaria: vende ${t.symbol} a ${fmt.price(t.exitPrice)} (${t.reason}), resultado ${fmt.money(t.pnl, this.d.config.accountCurrency)}`);
+      return;
+    }
     this.state.recentTrades = [...this.state.recentTrades, t].slice(-MAX_RECENT_TRADES);
     this.d.store.appendTrade(t);
     const m = this.marketById.get(t.marketId);

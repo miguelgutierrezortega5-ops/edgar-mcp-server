@@ -4,10 +4,11 @@
   "pollSeconds": 30,
   "historyBars": 720,
   "paper": {
-    "startingBalance": 50,
+    "startingBalance": 120,
     "cryptoFeePct": 0.1,
     "cryptoSlippagePct": 0.05,
-    "forexSpreadPips": 1.2
+    "forexSpreadPips": 1.2,
+    "topUp": { "to": 120, "id": "2026-10-11" }
   },
   "risk": {
     "riskPerTradePct": 1,
@@ -17,7 +18,7 @@
     },
     "maxOpenPositions": 8,
     "dailyLossLimitPct": 3,
-    "maxDrawdownPct": 15,
+    "maxDrawdownPct": 100,
     "maxBarVolumePct": 20
   },
   "protections": {
@@ -111,5 +112,6 @@
   },
   "mechas": { "enabled": true, "shorts": false },
   "tendencia": { "enabled": true, "coins": ["BTC"], "signal": "medias" },
+  "horaria": { "enabled": true, "orderUsd": 5 },
   "updates": { "auto": true, "checkHours": 1 }
 }

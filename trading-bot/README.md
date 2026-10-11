@@ -148,6 +148,7 @@ Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en `.env`, el bot avisa de cada op
 | `/informe` | Publica ya el informe detallado para Claude (ver abajo) |
 | `/mechas` | Reto 2: saldo, posiciones, qué tan bien acierta (predicción frente a realidad) y cómo van las variantes en la sombra |
 | `/tendencia` | Reto 3: saldo, sobre cuántas de sus 5 medias está BTC y cuánto de la cuenta tiene en BTC |
+| `/horaria` | Reto 1, operación de cada hora: qué compró y con qué probabilidad, las siguientes opciones, resultado de hoy y aciertos |
 
 Los mensajes enviados mientras el bot estaba apagado se descartan, no se ejecutan.
 
@@ -218,6 +219,32 @@ Antes de arrancarlo se midió qué tamaño de apuesta da más opciones de conver
 - **Con la ventaja medida, convertir 50 en 250 no es realista**: ningún nivel lo consiguió en un año simulado, y forzarlo solo aumenta la probabilidad de perder.
 
 El reto sigue en simulación para medir la ventaja con el mercado de ahora.
+
+**Desde el 11 de octubre de 2026 (pedido por el dueño):** la cuenta del reto 1 pasa a **120 USD** (`"paper": { "topUp": { "to": 120, "id": "2026-10-11" } }` deposita una sola vez lo que falte; sus resultados se cuentan desde ahí), **sin el freno por caída del 15%** (`"maxDrawdownPct": 100`) y con una **operación obligatoria cada hora**.
+
+### Operación de cada hora
+
+Cada hora, en cuanto cierra la vela de 1 hora, el bot calcula para cada una de las 12 monedas del reto 1 la probabilidad de que en la hora siguiente suba más que el 0.3% que cuestan la compra y la venta. Compra 5 USD (`horaria.orderUsd`) de la más probable y la vende en la decisión de la hora siguiente. Si la más probable sigue siendo la que ya tiene, se queda con ella otra hora, porque venderla y recomprarla solo pagaría comisiones. La operación horaria no se detiene por las pausas del aprendizaje ni por las protecciones, porque el dueño pidió que opere sí o sí; `/pausa` sí la detiene. No manda un mensaje por cada compra: cada día, a las 18:00 de México, llega un resumen. `/horaria` muestra el detalle en cualquier momento.
+
+**Cómo calcula la probabilidad.** Usa una regresión logística con 13 lecturas de las velas de 1 hora:
+
+- lo que la moneda se movió en 1, 4, 24 y 168 horas, en unidades de su volatilidad;
+- esa volatilidad;
+- el volumen de la última hora frente al del día;
+- dónde cerró dentro del rango del día;
+- lo que se movió BTC;
+- lo que se movió frente a las otras monedas;
+- la hora del día.
+
+Aprende de los últimos 90 días y se reentrena una vez al día, en la primera decisión después de las 00:00 UTC (18:00 en México), así la repetición `horaria` aprende de las mismas horas que el celular y elige lo mismo.
+
+**Lo que se midió antes de encenderla** (julio de 2024 a octubre de 2026, siempre con datos que el modelo no había visto):
+
+- la moneda elegida superó las comisiones el 36.9% de las horas, contra el 33.1% de una moneda al azar: sí elige mejor;
+- ninguna opción llegó al 50%, y en una hora el precio casi no se mueve en promedio, así que cada operación pierde en promedio lo que cuesta: −0.31%;
+- mantener cada compra 4, 8 o 24 horas tampoco mejoró.
+
+La repetición de los últimos 90 días (`node dist/index.js horaria --config config.reto50.json --dias 90`, con el mismo código que usa el bot) dio −11.77 USD con 5 USD por hora, o −0.13 USD al día. La probabilidad del modelo coincidió con la realidad: estimó 39% y acertó el 39% de las horas. La peor pérdida fue MINA: el modelo la siguió eligiendo mientras caía 40% en dos días y medio, porque una moneda que se mueve mucho también tiene más probabilidad de superar el 0.3%. Esta operación es un experimento en vivo pedido por el dueño, no una ventaja medida.
 
 ## Reto 2: cazador de mechas (50 USD, operaciones de minutos)
 
@@ -427,7 +454,9 @@ Los precios de cripto salen de `data-api.binance.vision`, el servicio público d
 | `risk.riskPerTradePct` | % del capital que se pierde si salta el stop (1) |
 | `risk.maxNotionalPct` | Tamaño máximo de una posición en % del capital: cripto 25, divisas 500 (apalancamiento 5:1) |
 | `risk.maxBarVolumePct` | Tamaño máximo como % de lo negociado en una vela típica (20). Protege en pares de poco volumen |
-| `risk.maxOpenPositions`, `dailyLossLimitPct`, `maxDrawdownPct` | 4 posiciones; parar el día al −3%; detenerse al −15% desde el máximo |
+| `risk.maxOpenPositions`, `dailyLossLimitPct`, `maxDrawdownPct` | 4 posiciones; parar el día al −3%; detenerse al −15% desde el máximo (100 = sin freno, como el reto 1 desde el 11 de octubre de 2026) |
+| `paper.topUp` | `{ "to": 120, "id": "..." }`: lleva la cuenta simulada de cripto a ese valor una sola vez por `id` |
+| `horaria` | Operación de cada hora del reto 1: `enabled`, `orderUsd` (5), `trainDays` (90), `retrainHours` (24), `waitMinutes` (5) |
 | `strategies` | Parámetros por defecto de cada estrategia (ver abajo) |
 | `learning` | `enabled`, cada cuántas horas (`everyHours`), historial (`bars`, `maxDays`), % de validación (`testPct`), mínimos de operaciones y factor de beneficio |
 | `crypto.exchange` | `binance` (por defecto), `kraken`, `bybit`, `okx`… |

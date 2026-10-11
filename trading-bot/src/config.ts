@@ -35,6 +35,8 @@ const configSchema = z
         cryptoSlippagePct: z.number().min(0).max(2).default(0.05),
         forexSpreadPips: z.number().min(0).max(50).default(1.2),
         minOrderUsd: z.number().min(0).default(5),
+        /** Brings the simulated crypto account (challenge 1) to `to` once per `id`; results count from there. */
+        topUp: z.object({ to: z.number().positive(), id: z.string().min(1) }).strict().optional(),
       })
       .strict()
       .default({}),
@@ -209,6 +211,17 @@ const configSchema = z
         minOrderUsd: z.number().min(0).default(5),
         feePct: z.number().min(0).default(0.1),
         slippagePct: z.number().min(0).default(0.05),
+      })
+      .strict()
+      .default({}),
+    /** Challenge 1's hourly trade (src/horaria): every hour it buys the coin most likely to beat its costs. */
+    horaria: z
+      .object({
+        enabled: z.boolean().default(false),
+        orderUsd: z.number().positive().default(5),
+        trainDays: z.number().int().min(14).max(365).default(90),
+        retrainHours: z.number().positive().default(24),
+        waitMinutes: z.number().min(0).max(59).default(5),
       })
       .strict()
       .default({}),

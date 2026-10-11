@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { unrealized } from "./brokers/broker.js";
 import { simulate, type PortfolioResult, type SeriesInput } from "./backtest.js";
 import { loadConfig, makeMarket, type Config } from "./config.js";
-import { quoteRate, rateFunction } from "./data/source.js";
+import { quoteRate, rateFunction, type CandleSource } from "./data/source.js";
 import { Bot, historyStart } from "./engine.js";
 import * as fmt from "./fmt.js";
 import { applyUpdate, confirmUpdate, currentVersion, describeVersion, failedUpdate, listUpdates, pendingUpdates, RESTART_CODE, takeRollbackNotice } from "./update.js";
@@ -24,6 +24,8 @@ import { selectCoins } from "./mechas/universe.js";
 import { BinanceSource } from "./data/binance.js";
 import { backtestTendencia } from "./tendencia/backtest.js";
 import { TendenciaBot, type DailySource } from "./tendencia/bot.js";
+import { Horaria, newHorariaState } from "./horaria/hourly.js";
+import { backtestHoraria } from "./horaria/backtest.js";
 import { join } from "node:path";
 import { buildBrokers, buildSources } from "./setup.js";
 import { paperName, Store } from "./store.js";
@@ -57,6 +59,9 @@ Comandos:
       --dias N             Días de historia del archivo de Binance (por defecto 7)
       --monedas A,B,C      Esas monedas en vez de elegirlas (p. ej. BEAT,TUT)
       --hasta AAAA-MM-DD   Último día de la prueba (por defecto ayer)
+  horaria                  Reto 1, operación de cada hora: la repite con velas de 1 h de Binance
+      --dias N             Días de historia (por defecto 30)
+      --hasta AAAA-MM-DD   Último día de la prueba (por defecto hasta la última hora)
   tendencia                Reto 3 (seguir tendencias): lo prueba con velas diarias de Binance
       --dias N             Días de historia (por defecto 365)
       --hasta AAAA-MM-DD   Último día de la prueba (por defecto ayer)
@@ -468,13 +473,16 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   // Its first real trade also publishes a report, so Claude can follow it up (without moving the daily one).
   const mechas = config.mechas.enabled ? mechasBot(config, notify, () => void sendReport("primera operación del reto 2").catch(() => undefined)) : undefined;
   const tendencia = config.tendencia.enabled ? tendenciaBot(config, notify) : undefined;
+  const hourly = horariaFor(config, state, src.crypto, markets);
+  // Positions the strategy watches minute by minute (the hourly one has no stop to watch).
+  const watched = () => state.positions.filter((p) => !p.kind).length;
   const learning = config.learning;
   const relearn = async () => {
     const last = loadLearning(config.dataDir);
     const age = last ? Date.now() - last.updatedAt : Infinity;
     if (age < learning.everyHours * 3_600_000) return;
     // Learning takes minutes and pauses the loop: wait until no position needs watching (up to a day late).
-    if (state.positions.length && age < (learning.everyHours + 24) * 3_600_000) return;
+    if (watched() && age < (learning.everyHours + 24) * 3_600_000) return;
     try {
       await runLearning(config, markets, notify);
     } catch (err) {
@@ -509,6 +517,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
       adaptativo: adaptiveState,
       reto2: mechas?.report(),
       reto3: tendencia?.report(),
+      horaria: hourly?.report(),
       registro: logTail,
     };
     const title = `📊 Informe para Claude${reason ? `: ${reason}` : ""} (${describeVersion(version)})`;
@@ -557,7 +566,7 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
     }
     if (learning.enabled) await relearn();
     const age = adaptiveState ? Date.now() - adaptiveState.updatedAt : Infinity;
-    if (config.adaptive.enabled && age >= config.adaptive.everyHours * 3_600_000 && (!state.positions.length || age >= (config.adaptive.everyHours + 4) * 3_600_000)) {
+    if (config.adaptive.enabled && age >= config.adaptive.everyHours * 3_600_000 && (!watched() || age >= (config.adaptive.everyHours + 4) * 3_600_000)) {
       try {
         adaptiveState = await runAdaptive(config, bot.markets, notify);
       } catch (err) {
@@ -585,13 +594,14 @@ async function run(config: Config, manual: Market[], markets: Market[], path: st
   };
   const onCommand = async (c: Command): Promise<string | undefined> => {
     if (c.name === "mechas") return mechas ? mechas.summary() : "El reto 2 (cazador de mechas) está apagado: mechas.enabled en la configuración.";
+    if (c.name === "horaria") return hourly ? hourly.summary(Date.now(), config.accountCurrency) : "La operación de cada hora del reto 1 está apagada: horaria.enabled en la configuración.";
     if (c.name === "tendencia") return tendencia ? tendencia.summary() : "El reto 3 (seguir tendencias) está apagado: tendencia.enabled en la configuración.";
     if (c.name === "informe") return (await sendReport()) ? "📌 Informe publicado y fijado para Claude." : "❌ No se pudo publicar el informe (revisa el registro).";
     if (c.name !== "actualizar") return undefined;
     await notify("⏳ Buscando mejoras en GitHub… (instalarlas tarda un par de minutos)");
     return install();
   };
-  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log), onCommand, adaptive: () => adaptiveState, futures: futuresFor });
+  const bot = new Bot({ config, markets, sources: src, brokers, fx, store, state, notify, log, beforeTick, commands: telegramCommands(config.telegram.enabled, log), onCommand, adaptive: () => adaptiveState, futures: futuresFor, hourly });
 
   log(`Configuración: ${path}. Revisión cada ${config.pollSeconds} s.`);
   for (const m of markets) {
@@ -629,6 +639,44 @@ const dailySource = (config: Config): DailySource => {
   const binance = new BinanceSource(join(config.dataDir, "velas"));
   return { days: (symbol, since) => binance.candles(symbol, "1d", since) };
 };
+
+/** Challenge 1's hourly trade, only on the simulated crypto account. */
+function horariaFor(config: Config, state: { horaria?: ReturnType<typeof newHorariaState> }, source: CandleSource | undefined, markets: Market[]): Horaria | undefined {
+  const coins = markets.filter((m) => m.type === "crypto");
+  if (!config.horaria.enabled || !source || !coins.length) return undefined;
+  if (config.crypto.broker !== "paper") {
+    log("La operación de cada hora solo funciona con la cuenta simulada (crypto.broker: paper); queda apagada.");
+    return undefined;
+  }
+  const c = config.paper;
+  return new Horaria({ config: config.horaria, cost: (2 * (c.cryptoFeePct + c.cryptoSlippagePct)) / 100, source, reference: referenceMarket(config.crypto.reference, coins[0]), state: (state.horaria ??= newHorariaState()), log });
+}
+
+async function runHoraria(config: Config, markets: Market[], days: number, until?: string): Promise<void> {
+  const coins = markets.filter((m) => m.type === "crypto");
+  if (!coins.length) throw new Error("no hay mercados de cripto en la configuración");
+  const end = until ? Date.parse(`${until}T00:00:00Z`) + DAY : Math.floor(Date.now() / 3_600_000) * 3_600_000;
+  if (!Number.isFinite(end)) throw new Error("--hasta debe ser una fecha AAAA-MM-DD");
+  const h = config.horaria;
+  const c = config.paper;
+  console.log(`Reto 1, operación de cada hora: ${coins.map((m) => m.base).join(", ")}; ${fmt.money(h.orderUsd, "USD")} por hora, modelo de ${h.trainDays} días reentrenado cada ${h.retrainHours} h, costos ${(c.cryptoFeePct + c.cryptoSlippagePct).toFixed(2)}% por lado.`);
+  const r = await backtestHoraria(h, { feePct: c.cryptoFeePct, slippagePct: c.cryptoSlippagePct }, new BinanceSource(join(config.dataDir, "velas")), coins, referenceMarket(config.crypto.reference, coins[0]), end - days * DAY, end, log);
+  if (!r.hours.length) throw new Error("no hay velas de 1 h suficientes para ese periodo");
+  const cost = (2 * (c.cryptoFeePct + c.cryptoSlippagePct)) / 100;
+  const month = (t: number) => new Date(t).toISOString().slice(0, 7);
+  const row = (name: string, hours: typeof r.hours, trades: typeof r.trades) => {
+    const judged = hours.filter((x) => x.move !== undefined);
+    const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
+    const pnl = trades.reduce((a, t) => a + t.pnl, 0);
+    console.log(`${name.padEnd(8)} ${String(hours.length).padStart(5)} ${String(hours.filter((x) => !x.kept).length).padStart(7)} ${fmt.money(pnl, "USD").padStart(11)} ${`${(mean(hours.map((x) => x.p)) * 100).toFixed(0)}%`.padStart(9)} ${`${(mean(judged.map((x) => (x.move! > cost ? 1 : 0))) * 100).toFixed(0)}%`.padStart(10)} ${`${(mean(judged.map((x) => x.beat ?? 0)) * 100).toFixed(0)}%`.padStart(8)}`);
+  };
+  console.log(`\nMes       horas compras   resultado  prob.calc  ganó tras   al azar\n${" ".repeat(45)}comisiones`);
+  for (const m of [...new Set(r.hours.map((x) => month(x.hour)))]) row(m, r.hours.filter((x) => month(x.hour) === m), r.trades.filter((t) => month(t.openedAt) === m));
+  row("Todo", r.hours, r.trades);
+  const pnl = r.trades.reduce((a, t) => a + t.pnl, 0);
+  console.log(`\n${r.trades.length} operaciones, ${r.trades.filter((t) => t.pnl > 0).length} con ganancia; resultado ${fmt.money(pnl, "USD")} (${fmt.money(pnl / Math.max(1, r.hours.length / 24), "USD")} por día).`);
+  console.log("\"Ganó tras comisiones\": horas en que la moneda elegida subió más que el 0.3% de ida y vuelta; \"al azar\": lo mismo para una moneda cualquiera.");
+}
 
 const tendenciaBot = (config: Config, notify: (text: string) => Promise<void>) =>
   new TendenciaBot({ config: config.tendencia, source: dailySource(config), notify, log, dir: join(config.dataDir, "tendencia") });
@@ -765,6 +813,11 @@ async function main(): Promise<void> {
       const days = Number(values.dias ?? 7);
       if (!(days > 0)) throw new Error("--dias debe ser un número positivo");
       return runMechas(config, days, values.monedas, values.hasta);
+    }
+    case "horaria": {
+      const days = Number(values.dias ?? 30);
+      if (!(days > 0)) throw new Error("--dias debe ser un número positivo");
+      return runHoraria(config, markets, days, values.hasta);
     }
     case "tendencia": {
       const days = Number(values.dias ?? 365);

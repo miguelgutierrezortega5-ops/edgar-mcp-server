@@ -55,6 +55,8 @@ export interface Position {
   watchFrom?: number;
   /** Close the position at this time if neither stop nor target was hit (time stop). */
   expiresAt?: number;
+  /** Challenge 1's hourly trade (src/horaria): no stop, sold or kept at each hour's decision. */
+  kind?: "horaria";
 }
 
 export interface ClosedTrade extends Position {
