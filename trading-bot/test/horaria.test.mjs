@@ -7,7 +7,7 @@ import { PaperBroker } from "../dist/brokers/paper.js";
 import { parseConfig } from "../dist/config.js";
 import { Bot } from "../dist/engine.js";
 import { backtestHoraria } from "../dist/horaria/backtest.js";
-import { Horaria, newHorariaState } from "../dist/horaria/hourly.js";
+import { Horaria, newHorariaState, trainIfDue } from "../dist/horaria/hourly.js";
 import { align, examples, fit, probability, rank } from "../dist/horaria/model.js";
 import { Store } from "../dist/store.js";
 import { referenceMarket } from "../dist/strategy.js";
@@ -65,6 +65,19 @@ test("the model learns which coins are more likely to beat the cost next hour an
   assert.ok(ranking[0].p > 0.7 && ranking[0].p - ranking[2].p > 0.3, JSON.stringify(ranking));
   assert.ok(ranking.every((r, k) => !k || ranking[k - 1].p >= r.p));
   assert.ok(probability(m, rows[0].x) > 0 && probability(m, rows[0].x) < 1);
+});
+
+test("a model first trained later in the UTC day learns from the same hours as one trained at 00:00", () => {
+  const data = candles({});
+  const a = align(COINS.map((c) => ({ symbol: `${c}/USDT`, candles: data.get(c) })), data.get("BTC"));
+  const c = { retrainHours: 24, trainDays: 14 };
+  const midnight = Date.UTC(2026, 0, 11); // T + 2 h
+  const at = (t) => a.times.indexOf(t - HOUR); // the last closed candle when deciding at t
+  const onTime = trainIfDue(a, at(midnight), undefined, c, 0.003, midnight);
+  const late = trainIfDue(a, at(midnight + HOUR), undefined, c, 0.003, midnight + HOUR + 34 * 60_000);
+  assert.deepEqual(late.w, onTime.w);
+  assert.equal(trainIfDue(a, at(midnight + HOUR), onTime, c, 0.003, midnight + HOUR), onTime); // same day: kept
+  assert.notDeepEqual(trainIfDue(a, at(midnight - HOUR), undefined, c, 0.003, midnight - HOUR).w, onTime.w); // the day before
 });
 
 function setup(script) {

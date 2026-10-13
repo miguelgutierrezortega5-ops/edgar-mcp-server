@@ -236,7 +236,7 @@ Cada hora, en cuanto cierra la vela de 1 hora, el bot calcula para cada una de l
 - lo que se movió frente a las otras monedas;
 - la hora del día.
 
-Aprende de los últimos 90 días y se reentrena una vez al día, en la primera decisión después de las 00:00 UTC (18:00 en México), así la repetición `horaria` aprende de las mismas horas que el celular y elige lo mismo.
+Aprende de los últimos 90 días y se reentrena una vez al día, en la primera decisión después de las 00:00 UTC (18:00 en México), siempre con las horas anteriores a las 00:00 aunque el celular despierte más tarde. Así la repetición `horaria` aprende de las mismas horas que el celular y elige lo mismo.
 
 **Lo que se midió antes de encenderla** (julio de 2024 a octubre de 2026, siempre con datos que el modelo no había visto):
 

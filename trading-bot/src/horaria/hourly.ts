@@ -66,13 +66,17 @@ export interface HorariaDeps {
 }
 
 /**
- * Retrains on the `trainDays` before hour index `i` (labels known by then) at the first decision of each
- * `retrainHours` block of UTC time (00:00 for 24 h), so the phone and a replay learn from the same hours.
+ * Retrains at the first decision of each `retrainHours` block of UTC time (00:00 for 24 h) on the `trainDays`
+ * before the block started, whenever that decision comes: a phone asleep at 00:00 that decides at 01:34 learns
+ * from the same hours as a replay deciding at 00:00, so both choose the same coins all day.
  */
 export function trainIfDue(a: Aligned, i: number, model: ProbabilityModel | undefined, c: HorariaConfig, cost: number, now: number): ProbabilityModel | undefined {
   const block = c.retrainHours * HOUR;
   if (model && Math.floor(now / block) === Math.floor(model.trainedAt / block)) return model;
-  const rows = examples(a, i - c.trainDays * 24, i - 1, cost);
+  const start = Math.floor(now / block) * block;
+  let end = i; // the last candle closed when the block started
+  while (end > 0 && a.times[end] + HOUR > start) end--;
+  const rows = examples(a, end - c.trainDays * 24, end - 1, cost);
   return rows.length >= 500 ? fit(rows, now) : model;
 }
 
