@@ -1,0 +1,29 @@
+Ref,Qty,Valor,Descripcion,Encapsulado,Ejemplo de referencia
+U3,1,WT32-ETH01,Modulo ESP32 + LAN8720 Ethernet,Modulo con 2 filas de pines 2.54 mm,WT32-ETH01 (Wireless-Tag)
+J_U3,2,1xN hembra,Zocalo para WT32-ETH01 (N segun modulo),Tira hembra 2.54 mm TH,Generico
+U1,1,74HCT245N,Buffer octal 3.3V->5V,DIP-20,TI SN74HCT245N
+U1_S,1,Zocalo DIP-20,Zocalo para U1,DIP-20 TH,Generico
+U2,1,R-78E5.0-1.0,Regulador conmutado 5V 1A (entrada 7-28V),SIP-3 TH,RECOM R-78E5.0-1.0
+F0,1,PTC 0.5A,Fusible rearmable rama logica (60V),Radial TH,Bourns MF-R050
+F1-F8,8,Mini blade (segun tira),Portafusibles mini blade ATM/APM,TH PCB,Keystone 3568
+F1-F8_fus,8,5-10A,Fusible mini blade,Mini blade,Littelfuse 0297xxx / generico
+D1,1,1N5819,Schottky 40V 1A proteccion inversa,DO-41,ON 1N5819
+D2,1,P6KE6.8A,TVS clamp rail +5V,DO-15,Littelfuse P6KE6.8A
+LED1,1,LED 3mm verde,Piloto +5V,3 mm TH,Generico
+C1,1,1000uF 35V,Electrolitico bulk VIN,Radial 10mm paso 5mm,Panasonic EEU-FR1V102
+C2,1,10uF 50V,Entrada R-78,Radial 5mm,Generico
+C3,1,22uF 16V,Salida R-78,Radial 5mm,Generico
+C4,1,100uF 10V,Bulk +5V,Radial 6.3mm,Generico
+C5,1,100nF,Desacoplo U1,Ceramico paso 5.08mm,Generico
+C6,1,100nF,Antirrebote boton,Ceramico paso 5.08mm,Generico
+C7,1,100nF,Desacoplo +3V3,Ceramico paso 5.08mm,Generico
+R1-R8,8,33R,Serie en linea de datos,Axial 1/4W,Generico
+R10,1,1k,LED piloto,Axial 1/4W,Generico
+R11,1,10k,Pull-up boton IO39,Axial 1/4W,Generico
+RN1,1,10k x8 bussed,Red pull-down entradas 74HCT245,SIP-9,Bourns 4609X-101-103LF
+SW1,1,Pulsador 6x6,Boton WLED (IO39),6x6 mm TH,Generico
+JP1,1,1x3 macho + jumper,Selector 5V bypass / regulador,Paso 2.54 mm,Generico
+J_IN,1,2 vias alta corriente,Entrada VIN/GND (>=30A),Bornera paso 9.5/10 mm,Phoenix MKDS 5/2-9.5
+J1-J8,8,3 vias,Salida DATA/V+/GND,Bornera paso 5.08 mm,Phoenix MKDS 1.5/3-5.08
+J_PROG,1,1x5 macho,Programacion GND/TX0/RX0/IO0/EN,Paso 2.54 mm,Generico
+J_AUX,1,1x5 macho,Auxiliar 3V3/GND/IO17/IO35/IO36,Paso 2.54 mm,Generico
