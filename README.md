@@ -44,7 +44,7 @@ El instalador:
 
 - añade el servidor a `claude_desktop_config.json` y guarda una copia de seguridad (`.bak`);
 - lo registra en Claude Code para todos tus proyectos;
-- instala la skill de análisis en `~/.claude/skills`.
+- instala las skills de análisis en `~/.claude/skills`.
 
 Después, **reinicia Claude Desktop**.
 
@@ -57,7 +57,7 @@ Sin preguntas: `npm run setup -- --user-agent "Tu Nombre tu@email.com" --yes`
 ```bash
 npm install
 claude mcp add edgar --scope user -e SEC_USER_AGENT="Tu Nombre tu@email.com" -- node "$(pwd)/dist/index.js"
-mkdir -p ~/.claude/skills && cp -r skills/sec-financial-analysis ~/.claude/skills/
+mkdir -p ~/.claude/skills && cp -r skills/* ~/.claude/skills/
 ```
 
 **Claude Desktop** (`claude_desktop_config.json`)
@@ -74,12 +74,15 @@ mkdir -p ~/.claude/skills && cp -r skills/sec-financial-analysis ~/.claude/skill
 }
 ```
 
-### Skill de análisis en claude.ai o Claude Desktop
+### Skills de análisis en claude.ai o Claude Desktop
 
-La skill `sec-financial-analysis` enseña a Claude flujos de análisis completos (empresa, comparación, DCF, resultados, insiders, 13F, dividendos, macro). Para usarla en claude.ai o Claude Desktop:
+- `sec-financial-analysis` enseña a Claude flujos de análisis completos (empresa, comparación, DCF, resultados, insiders, 13F, dividendos, macro).
+- `objective-market-analysis` controla cómo procesa y reporta la información: probabilidades y colas calculadas con historia larga (`scripts/riskstats.py`), el escenario bajista evaluado con el mismo rigor que el alcista, miedo y comportamiento de manada medidos como datos, corrección de sesgos de fuentes (precios objetivo, guías, narrativas) y un registro de pronósticos con puntuación de calibración (`calibration/forecasts.jsonl`).
 
-1. Descarga `sec-financial-analysis-skill.zip` desde [Releases](https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server/releases).
-2. Súbela en **Configuración → Capacidades → Skills**.
+Para usarlas en claude.ai o Claude Desktop:
+
+1. Descarga `sec-financial-analysis-skill.zip` y `objective-market-analysis-skill.zip` desde [Releases](https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server/releases).
+2. Súbelas en **Configuración → Capacidades → Skills**.
 
 ## Primeros pasos
 

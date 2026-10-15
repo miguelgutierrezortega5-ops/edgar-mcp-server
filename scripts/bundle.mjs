@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Build the Claude Desktop extension (build/edgar-mcp-server-<version>.mcpb) and a zip of the
-// analysis skill for claude.ai / Claude Desktop (Settings → Capabilities → Skills).
+// Build the Claude Desktop extension (build/edgar-mcp-server-<version>.mcpb) and a zip of each
+// skill in skills/ for claude.ai / Claude Desktop (Settings → Capabilities → Skills).
 // Run with `npm run bundle` (it builds first).
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,14 +41,18 @@ rmSync(file, { force: true });
 sh("npx", ["-y", MCPB, "validate", join(stage, "manifest.json")]);
 sh("npx", ["-y", MCPB, "pack", stage, file]);
 
-// 4. Skill zip (needs the `zip` command, present on macOS/Linux and GitHub runners).
-const skillZip = join(out, "sec-financial-analysis-skill.zip");
-try {
-  rmSync(skillZip, { force: true });
-  execFileSync("zip", ["-rq", skillZip, "sec-financial-analysis"], { cwd: join(root, "skills") });
-} catch {
-  console.warn("`zip` not found: skipped the skill zip.");
+// 4. One zip per skill (needs the `zip` command, present on macOS/Linux and GitHub runners).
+const skillZips = [];
+for (const name of readdirSync(join(root, "skills"))) {
+  const skillZip = join(out, `${name}-skill.zip`);
+  try {
+    rmSync(skillZip, { force: true });
+    execFileSync("zip", ["-rq", skillZip, name, "-x", "*__pycache__*"], { cwd: join(root, "skills") });
+    skillZips.push(skillZip);
+  } catch {
+    console.warn(`\`zip\` not found: skipped ${name}-skill.zip.`);
+  }
 }
 
 console.log(`\n${tools.length} tools · ${file} (${(statSync(file).size / 1e6).toFixed(1)} MB)`);
-if (existsSync(skillZip)) console.log(`Skill: ${skillZip}`);
+for (const z of skillZips) console.log(`Skill: ${z}`);

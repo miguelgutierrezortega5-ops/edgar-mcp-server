@@ -27,5 +27,5 @@ jobs:
         with:
           files: |
             build/*.mcpb
-            build/sec-financial-analysis-skill.zip
+            build/*-skill.zip
           generate_release_notes: true

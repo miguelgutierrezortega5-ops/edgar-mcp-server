@@ -98,14 +98,16 @@ function configureClaudeCode(env) {
 }
 
 function installSkill() {
-  const target = join(homedir(), ".claude", "skills", "sec-financial-analysis");
-  if (dryRun) {
-    log(`  (simulación) Copiaría la skill a ${target}`);
-    return;
+  for (const name of readdirSync(join(root, "skills"))) {
+    const target = join(homedir(), ".claude", "skills", name);
+    if (dryRun) {
+      log(`  (simulación) Copiaría la skill ${name} a ${target}`);
+      continue;
+    }
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(join(root, "skills", name), target, { recursive: true });
+    ok(`Skill ${name} instalada en ${target}`);
   }
-  mkdirSync(dirname(target), { recursive: true });
-  cpSync(join(root, "skills", "sec-financial-analysis"), target, { recursive: true });
-  ok(`Skill de análisis instalada en ${target}`);
 }
 
 async function main() {
