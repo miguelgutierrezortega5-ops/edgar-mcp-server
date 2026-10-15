@@ -407,13 +407,20 @@ export class Bot {
     const decision = await h.decide(now, markets);
     if (!decision) return;
     const ccy = this.d.config.accountCurrency;
-    const pick = decision.ranking.find((r) => this.marks.has(r.market.id));
-    const shown = pick ?? decision.ranking[0];
+    const top = decision.ranking[0];
     let held = this.state.positions.find((p) => p.kind === "horaria");
     // /pausa, or the drawdown breaker if one is configured, stop it too.
     const stopped = this.state.manualPause || !!this.state.risk[paperName("crypto")]?.halted;
+    // Keeping the coin it holds needs no price; selling it or buying the most likely one does. A price that
+    // did not load (a phone back from an outage loads its markets one by one) gets a few minutes before the
+    // hour falls back to the most likely coin that has one.
+    const keep = !!held && held.marketId === top?.market.id && !stopped;
+    const missing = !keep && [held?.marketId, stopped ? undefined : top?.market.id].some((id) => id !== undefined && !this.marks.has(id));
+    if (missing && h.waitForPrices(decision.hour, now)) return;
+    const pick = keep ? top : decision.ranking.find((r) => this.marks.has(r.market.id));
+    const shown = pick ?? top;
     let action: HourAction;
-    if (held && pick && held.marketId === pick.market.id && !stopped) action = "mantiene";
+    if (keep) action = "mantiene";
     else {
       const m = held && this.marketById.get(held.marketId);
       const mark = held && this.marks.get(held.marketId);

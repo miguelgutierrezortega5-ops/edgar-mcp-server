@@ -82,6 +82,8 @@ export function trainIfDue(a: Aligned, i: number, model: ProbabilityModel | unde
 
 export class Horaria {
   private failing = false;
+  /** Since when the current hour has been waiting for a price. */
+  private priceWait?: { hour: number; since: number };
 
   constructor(private readonly d: HorariaDeps) {}
 
@@ -138,6 +140,12 @@ export class Horaria {
     const ranking = rank(a, i, model).map((r) => ({ market: bySymbol.get(r.symbol)!, p: r.p }));
     this.state.ranking = ranking.map((r) => ({ symbol: r.market.symbol, p: r.p }));
     return { hour, ranking };
+  }
+
+  /** True while an hour may still wait for a missing price (`waitMinutes` from the first try). */
+  waitForPrices(hour: number, now: number): boolean {
+    if (this.priceWait?.hour !== hour) this.priceWait = { hour, since: now };
+    return now - this.priceWait.since < this.d.config.waitMinutes * 60_000;
   }
 
   /** Records what the engine did with the hour; returns the previous day's summary once a day. */

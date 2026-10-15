@@ -90,8 +90,15 @@ function setup(script) {
     paper: { topUp: { to: 120, id: "2026-10-11" } },
     horaria: { enabled: true, trainDays: 14 },
   });
-  // Up to the candle forming now, as Binance answers.
-  const source = { name: "fake", history: async (m, since) => data.get(m.base).filter((c) => c.time >= since && c.time <= Math.floor(now / HOUR) * HOUR) };
+  // Up to the candle forming now, as Binance answers; coins in `down` fail the engine's short price refresh.
+  const down = new Set();
+  const source = {
+    name: "fake",
+    history: async (m, since) => {
+      if (down.has(m.base) && since > now - 24 * HOUR) throw new Error("fetch failed");
+      return data.get(m.base).filter((c) => c.time >= since && c.time <= Math.floor(now / HOUR) * HOUR);
+    },
+  };
   const store = new Store(config.dataDir);
   const state = store.load(50);
   const messages = [];
@@ -112,7 +119,7 @@ function setup(script) {
     commands: async () => commands.splice(0),
     hourly,
   });
-  return { bot, state, messages, logs, commands, hourly, at: (t) => (now = t) };
+  return { bot, state, messages, logs, commands, hourly, down, at: (t) => (now = t) };
 }
 
 test("every hour challenge 1 buys the most likely coin, even with its markets paused, keeps it while it stays first, and /pausa stops it", async () => {
@@ -169,6 +176,37 @@ test("every hour challenge 1 buys the most likely coin, even with its markets pa
   assert.equal(s.state.horaria.decisions.at(-1).action, "pausa");
   assert.equal(s.state.horaria.trades.at(-1).reason, "fin de su hora");
   assert.ok(s.state.horaria.trades.at(-1).pnl > 0); // B rose 1% twice
+});
+
+test("a missing price: the held coin is kept without one, a switch waits a few minutes for it, then falls back", async () => {
+  const s = setup({ AA: [1, -1, -1, -1, -1], BB: [-1, 1, 1, 1, 1], CC: [-1, -1, -1, -1, -1] });
+  await s.bot.tick(); // 22:00: buys AA
+  // 23:00: BB is now first but its price does not load: the hour waits instead of buying the next coin.
+  s.down.add("BB");
+  s.at(T + HOUR + 60_000);
+  await s.bot.tick();
+  assert.equal(s.state.horaria.decisions.length, 1);
+  assert.deepEqual(s.state.positions.map((p) => p.symbol), ["AA/USDT"]);
+  s.down.delete("BB");
+  s.at(T + HOUR + 2 * 60_000);
+  await s.bot.tick();
+  assert.deepEqual(s.state.positions.map((p) => p.symbol), ["BB/USDT"]);
+  assert.equal(s.state.horaria.decisions.at(-1).action, "compra");
+  // 00:00: BB stays first; without its price it is still kept (nothing to buy or sell).
+  s.down.add("BB");
+  s.at(T + 2 * HOUR + 60_000);
+  await s.bot.tick();
+  assert.equal(s.state.horaria.decisions.at(-1).action, "mantiene");
+  assert.deepEqual(s.state.positions.map((p) => p.symbol), ["BB/USDT"]);
+  // 01:00 with /pausa and still no BB price: it waits 5 minutes for it, then gives the hour up and keeps BB.
+  s.commands.push({ name: "pausa", args: [] });
+  s.at(T + 3 * HOUR + 60_000);
+  await s.bot.tick();
+  assert.equal(s.state.horaria.decisions.length, 3);
+  s.at(T + 3 * HOUR + 7 * 60_000);
+  await s.bot.tick();
+  assert.equal(s.state.horaria.decisions.at(-1).action, "pausa");
+  assert.deepEqual(s.state.positions.map((p) => p.symbol), ["BB/USDT"]); // sold at the next hour with a price
 });
 
 test("the replay follows the same choice: buys the most likely coin each hour and keeps it while it stays first", async () => {
