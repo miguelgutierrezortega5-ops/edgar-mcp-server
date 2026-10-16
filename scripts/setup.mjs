@@ -3,7 +3,7 @@
 //
 //   npm run setup                                   (interactivo)
 //   npm run setup -- --user-agent "Nombre email@x.com" --yes
-//   Opciones: --desktop / --no-desktop, --code / --no-code, --fred-key CLAVE, --dry-run
+//   Opciones: --desktop / --no-desktop, --code / --no-code, --fred-key CLAVE, --banxico-token TOKEN, --dry-run
 import { spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const entry = join(root, "dist", "index.js");
+const signalsEntry = join(root, "dist", "signals", "index.js");
 const isWin = platform() === "win32";
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(`--${name}`);
@@ -54,7 +55,7 @@ function desktopConfigPaths() {
   return [join(process.env.XDG_CONFIG_HOME || join(home, ".config"), "Claude", "claude_desktop_config.json")];
 }
 
-function configureDesktop(configPath, server) {
+function configureDesktop(configPath, servers) {
   let config = {};
   if (existsSync(configPath)) {
     try {
@@ -64,9 +65,9 @@ function configureDesktop(configPath, server) {
       return false;
     }
   }
-  config.mcpServers = { ...(config.mcpServers ?? {}), edgar: server };
+  config.mcpServers = { ...(config.mcpServers ?? {}), ...servers };
   if (dryRun) {
-    log(`  (simulación) Escribiría en ${configPath}:\n${JSON.stringify({ mcpServers: { edgar: server } }, null, 2)}`);
+    log(`  (simulación) Escribiría en ${configPath}:\n${JSON.stringify({ mcpServers: servers }, null, 2)}`);
     return true;
   }
   mkdirSync(dirname(configPath), { recursive: true });
@@ -84,17 +85,19 @@ function run(cmd, cmdArgs, opts = {}) {
   return spawnSync(cmd, isWin ? cmdArgs.map(quoteWin) : cmdArgs, { encoding: "utf8", shell: isWin, ...opts });
 }
 
-function configureClaudeCode(env) {
-  const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-  const addArgs = ["mcp", "add", "--scope", "user", "edgar", ...envArgs, "--", process.execPath, entry];
-  if (dryRun) {
-    log(`  (simulación) claude ${addArgs.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}`);
-    return;
+function configureClaudeCode(servers) {
+  for (const [name, server] of Object.entries(servers)) {
+    const envArgs = Object.entries(server.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+    const addArgs = ["mcp", "add", "--scope", "user", name, ...envArgs, "--", server.command, ...server.args];
+    if (dryRun) {
+      log(`  (simulación) claude ${addArgs.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}`);
+      continue;
+    }
+    run("claude", ["mcp", "remove", "--scope", "user", name]); // ignore "not found"
+    const res = run("claude", addArgs, { stdio: "pipe" });
+    if (res.status === 0) ok(`Claude Code: servidor "${name}" configurado (ámbito de usuario: disponible en todos tus proyectos).`);
+    else warn(`No se pudo registrar "${name}" en Claude Code: ${(res.stderr || res.stdout || "").trim()}`);
   }
-  run("claude", ["mcp", "remove", "--scope", "user", "edgar"]); // ignore "not found"
-  const res = run("claude", addArgs, { stdio: "pipe" });
-  if (res.status === 0) ok("Claude Code configurado (ámbito de usuario: disponible en todos tus proyectos).");
-  else warn(`No se pudo registrar en Claude Code: ${(res.stderr || res.stdout || "").trim()}`);
 }
 
 function installSkill() {
@@ -118,10 +121,10 @@ async function main() {
     process.exit(1);
   }
 
-  if (!existsSync(entry)) {
-    log("Compilando el servidor…");
+  if (!existsSync(entry) || !existsSync(signalsEntry)) {
+    log("Compilando los servidores…");
     const build = run("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
-    if (build.status !== 0 || !existsSync(entry)) {
+    if (build.status !== 0 || !existsSync(entry) || !existsSync(signalsEntry)) {
       log("La compilación falló. Ejecuta primero `npm install` en la carpeta del proyecto.");
       process.exit(1);
     }
@@ -139,21 +142,26 @@ async function main() {
     }
     const fredKey = option("fred-key") ?? process.env.FRED_API_KEY ?? (await ask(rl, "Clave gratuita de FRED (opcional, Enter para omitir): ", ""));
 
+    const banxicoToken = option("banxico-token") ?? process.env.BANXICO_TOKEN ?? (await ask(rl, "Token gratuito de Banxico para el tipo de cambio FIX y la tasa objetivo (opcional, Enter para omitir): ", ""));
+
     const env = { SEC_USER_AGENT: userAgent, ...(fredKey ? { FRED_API_KEY: fredKey } : {}) };
-    const server = { command: process.execPath, args: [entry], env };
+    const servers = {
+      edgar: { command: process.execPath, args: [entry], env },
+      "market-signals": { command: process.execPath, args: [signalsEntry], env: banxicoToken ? { BANXICO_TOKEN: banxicoToken } : {} },
+    };
 
     log("\n1) Claude Desktop");
     const paths = desktopConfigPaths();
     const found = paths.filter((p) => existsSync(dirname(p)));
     const wantDesktop = flag("no-desktop") ? false : flag("desktop") || found.length > 0 ? await confirm(rl, "¿Configurar Claude Desktop?", true) : false;
-    if (wantDesktop) for (const p of found.length ? found : paths.slice(0, 1)) configureDesktop(p, server);
+    if (wantDesktop) for (const p of found.length ? found : paths.slice(0, 1)) configureDesktop(p, servers);
     else log(found.length ? "  Omitido." : "  No se encontró Claude Desktop (usa --desktop para configurarlo igualmente).");
 
     log("\n2) Claude Code");
     const hasClaude = run("claude", ["--version"], { stdio: "pipe" }).status === 0;
     const wantCode = flag("no-code") ? false : flag("code") || hasClaude ? await confirm(rl, "¿Configurar Claude Code e instalar la skill de análisis?", true) : false;
     if (wantCode) {
-      if (hasClaude || dryRun) configureClaudeCode(env);
+      if (hasClaude || dryRun) configureClaudeCode(servers);
       else warn("No se encontró el comando `claude`; solo se instala la skill.");
       installSkill();
     } else log(hasClaude ? "  Omitido." : "  No se encontró Claude Code (https://claude.com/claude-code).");
@@ -162,7 +170,8 @@ async function main() {
 Listo. Siguientes pasos:
   • Reinicia Claude Desktop (ciérralo del todo, también desde la bandeja del sistema) y abre un chat nuevo.
   • Prueba: "Analiza Microsoft con las herramientas de edgar" o usa las plantillas del menú "+" → edgar.
-  • En Claude Code: ejecuta /mcp para comprobar que "edgar" aparece conectado.
+  • Prueba también: "¿Qué probabilidad da el mercado a una subida de tasas de la Fed?" (servidor market-signals).
+  • En Claude Code: ejecuta /mcp para comprobar que "edgar" y "market-signals" aparecen conectados.
 `);
   } finally {
     rl?.close();

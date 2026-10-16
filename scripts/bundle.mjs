@@ -25,21 +25,28 @@ mkdirSync(stage, { recursive: true });
 for (const f of ["dist", "skills", "README.md", "LICENSE", "package.json", "package-lock.json"]) cpSync(join(root, f), join(stage, f), { recursive: true });
 sh("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], stage);
 
-// 2. Manifest, with the tool list taken from the server itself so it never drifts.
-const client = new Client({ name: "bundle", version: pkg.version });
-await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(stage, "dist", "index.js")], env: { ...process.env, SEC_USER_AGENT: "bundle build@example.com" } }));
-const { tools } = await client.listTools();
-await client.close();
-const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
-if (manifest.version !== pkg.version) throw new Error(`manifest.json version ${manifest.version} ≠ package.json ${pkg.version}`);
-manifest.tools = tools.map((t) => ({ name: t.name, description: (t.description ?? "").split("\n")[0] }));
-writeFileSync(join(stage, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-
-// 3. Validate and pack.
-const file = join(out, `edgar-mcp-server-${pkg.version}.mcpb`);
-rmSync(file, { force: true });
-sh("npx", ["-y", MCPB, "validate", join(stage, "manifest.json")]);
-sh("npx", ["-y", MCPB, "pack", stage, file]);
+// 2–3. One extension per server: manifest with the tool list taken from the server itself (so it
+// never drifts), then validate and pack. Both share the staged files.
+const EXTENSIONS = [
+  { manifest: "manifest.json", entry: join("dist", "index.js"), env: { SEC_USER_AGENT: "bundle build@example.com" } },
+  { manifest: "manifest-signals.json", entry: join("dist", "signals", "index.js"), env: {} },
+];
+const files = [];
+for (const ext of EXTENSIONS) {
+  const client = new Client({ name: "bundle", version: pkg.version });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(stage, ext.entry)], env: { ...process.env, ...ext.env } }));
+  const { tools } = await client.listTools();
+  await client.close();
+  const manifest = JSON.parse(readFileSync(join(root, ext.manifest), "utf8"));
+  if (manifest.version !== pkg.version) throw new Error(`${ext.manifest} version ${manifest.version} ≠ package.json ${pkg.version}`);
+  manifest.tools = tools.map((t) => ({ name: t.name, description: (t.description ?? "").split("\n")[0] }));
+  writeFileSync(join(stage, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  const file = join(out, `${manifest.name}-${pkg.version}.mcpb`);
+  rmSync(file, { force: true });
+  sh("npx", ["-y", MCPB, "validate", join(stage, "manifest.json")]);
+  sh("npx", ["-y", MCPB, "pack", stage, file]);
+  files.push({ file, tools: tools.length });
+}
 
 // 4. One zip per skill (needs the `zip` command, present on macOS/Linux and GitHub runners).
 const skillZips = [];
@@ -54,5 +61,5 @@ for (const name of readdirSync(join(root, "skills"))) {
   }
 }
 
-console.log(`\n${tools.length} tools · ${file} (${(statSync(file).size / 1e6).toFixed(1)} MB)`);
+for (const f of files) console.log(`\n${f.tools} tools · ${f.file} (${(statSync(f.file).size / 1e6).toFixed(1)} MB)`);
 for (const z of skillZips) console.log(`Skill: ${z}`);

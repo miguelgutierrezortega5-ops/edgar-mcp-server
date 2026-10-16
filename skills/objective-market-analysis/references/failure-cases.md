@@ -19,6 +19,7 @@ These are real errors from the conversation that produced this skill. Four of th
   - Use the most demanding credible consensus and name it.
   - Give a symmetric distribution of earnings-day moves from the stock's own history (past reactions, average absolute move, share of up days), not a one-sided range.
   - Log the range with its stated coverage.
+  - Read the priced move first: `options_get_implied_move` with `event_date`. For LLY's 29 October report the options priced a ±7.9% straddle (±7.2% from the event alone) on 16 October.
 
 ## 3. An inflation surprise reported with the milder measure
 
@@ -26,6 +27,7 @@ These are real errors from the conversation that produced this skill. Four of th
 - **Correct handling.**
   - Lead with the market's measure vs consensus, then the others.
   - Attribute to energy only after the core number is shown to be benign.
+  - Take the consensus from `calendar_get_economic_events`. For this release it listed core PPI at 0.3% and headline PPI at 0.6%; my search had not found one.
 
 ## 4. "History favours a rebound" from a benign sample
 
@@ -52,3 +54,8 @@ These are real errors from the conversation that produced this skill. Four of th
 - **What happened.** At midnight on 15 October the estimate for the portfolio at the open was −1,200 to −2,000 MXN, based on futures and the Asian sell-off. The day closed at about −60 MXN after an intraday reversal.
 - **Lesson.** Point estimates from overnight futures ignore the session's spread of outcomes.
 - **Correct handling.** Give the distribution, e.g. the portfolio's 1-day P5/median/P95 from `riskstats.py --portfolio … --horizons 1`, centred on the futures-implied move.
+
+## 7. Fed odds taken from press wording
+
+- **What happened.** After the September CPI, the answer quoted a Reuters sentence ("~49% chance") whose wording was ambiguous between holding and hiking.
+- **Correct handling.** Read `rates_get_fed_probabilities`, which gives two independent markets. On 16 October, fed funds futures priced 28% and Kalshi 29% for a hike on 28 October. Report both, and never relay press-reported odds.

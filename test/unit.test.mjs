@@ -350,3 +350,150 @@ describe("dividends", () => {
 test("VERSION matches package.json", () => {
   assert.equal(VERSION, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
 });
+
+// ---------- market-signals-mcp (pure functions, no network) ----------
+
+import { filterCalendar } from "../dist/signals/calendar.js";
+import { summarizeAuctions } from "../dist/signals/auctions.js";
+import { summarizePositioning } from "../dist/signals/cot.js";
+import { parseReportText } from "../dist/signals/earnings.js";
+import { addMonths, impliedPath, kalshiOutcomes, parseFomcCalendar, zqSymbol } from "../dist/signals/fed.js";
+import { cboeSymbol, includesEvent, parseContracts, summarizeChain } from "../dist/signals/options.js";
+import { parseShortVolume } from "../dist/signals/shorts.js";
+import { normCdf, parseNum } from "../dist/signals/stats.js";
+
+describe("signals: stats", () => {
+  test("normCdf matches known quantiles", () => {
+    assert.ok(Math.abs(normCdf(0) - 0.5) < 1e-8);
+    assert.ok(Math.abs(normCdf(1.959964) - 0.975) < 1e-6);
+    assert.ok(Math.abs(normCdf(-1.959964) - 0.025) < 1e-6);
+  });
+  test("parseNum handles currency, commas and parentheses", () => {
+    assert.equal(parseNum("$1,234.5"), 1234.5);
+    assert.equal(parseNum("(3.2)"), -3.2);
+    assert.equal(parseNum("N/A"), null);
+  });
+});
+
+describe("signals: options", () => {
+  const opt = (option, bid, ask, iv, delta, oi = 10, volume = 5) => ({ option, bid, ask, iv, open_interest: oi, volume, delta, theo: 0, last_trade_price: 0 });
+  const chain = {
+    timestamp: "2026-10-16 14:00:00",
+    data: {
+      symbol: "TEST",
+      current_price: 100,
+      iv30: 40,
+      options: [
+        opt("TEST261030C00100000", 3.9, 4.1, 0.3, 0.5),
+        opt("TEST261030P00100000", 3.9, 4.1, 0.3, -0.5),
+        opt("TEST261120C00100000", 4.9, 5.1, 0.4, 0.52, 20, 10),
+        opt("TEST261120P00100000", 4.9, 5.1, 0.4, -0.48, 30, 20),
+        opt("TEST261120P00090000", 1.0, 1.2, 0.45, -0.25),
+        opt("TEST261120C00110000", 1.0, 1.2, 0.38, 0.25),
+      ],
+    },
+  };
+  const now = new Date("2026-10-16T14:00:00Z");
+
+  test("cboeSymbol prefixes indexes", () => {
+    assert.equal(cboeSymbol("^SPX"), "_SPX");
+    assert.equal(cboeSymbol("nvda"), "NVDA");
+  });
+  test("parseContracts reads OCC symbols and mids", () => {
+    const [c] = parseContracts([opt("NVDA261016C00217500", 1, 2, 0.4, 0.5)]);
+    assert.deepEqual([c.expiry, c.type, c.strike, c.mid], ["2026-10-16", "C", 217.5, 1.5]);
+  });
+  test("includesEvent respects session timing", () => {
+    assert.equal(includesEvent("2026-10-29", "2026-10-29", "before_open"), true);
+    assert.equal(includesEvent("2026-10-29", "2026-10-29", "after_close"), false);
+    assert.equal(includesEvent("2026-10-30", "2026-10-29", "after_close"), true);
+  });
+  test("summarizeChain prices the straddle, skew, levels and the event move", () => {
+    const s = summarizeChain(chain, { now, rate: 0.04, levels: [-0.1, 0.1], maxExpiries: 5, event: { date: "2026-11-01", timing: "after_close" } });
+    const nov = s.expiries.find((e) => e.expiry === "2026-11-20");
+    assert.ok(Math.abs(nov.movePct - 0.1) < 1e-9);
+    assert.ok(Math.abs(nov.skew25 - 0.07) < 1e-9);
+    assert.ok(nov.levels[0].probability > 0.05 && nov.levels[0].probability < 0.5);
+    assert.ok(nov.levels[1].probability > 0.05 && nov.levels[1].probability < 0.5);
+    assert.equal(s.event.postExpiry, "2026-11-20");
+    assert.equal(s.event.preExpiry, "2026-10-30");
+    const T = (Date.parse("2026-11-20T20:30:00Z") - now.getTime()) / (365 * 86_400_000);
+    assert.ok(Math.abs(s.event.eventSigmaPct - Math.sqrt((0.16 - 0.09) * T)) < 1e-9);
+    assert.ok(Math.abs(s.putCallOi - 50 / 40) < 1e-9);
+  });
+});
+
+describe("signals: fed", () => {
+  test("parseFomcCalendar reads decision days and skips minutes dates", () => {
+    const html = `<h4><a id="1">2026 FOMC Meetings</a></h4>
+      <div class="fomc-meeting__month col"><strong>January</strong></div><div class="fomc-meeting__date col">27-28</div>(Released February 18, 2026)
+      <div class="fomc-meeting__month col"><strong>March</strong></div><div class="fomc-meeting__date col">17-18*</div>
+      <div class="fomc-meeting__month col"><strong>Oct/Nov</strong></div><div class="fomc-meeting__date col">31-1</div>`;
+    assert.deepEqual(parseFomcCalendar(html), [
+      { date: "2026-01-28", sep: false },
+      { date: "2026-03-18", sep: true },
+      { date: "2026-11-01", sep: false },
+    ]);
+  });
+  test("zqSymbol and addMonths", () => {
+    assert.equal(zqSymbol("2026-11"), "ZQX26.CBT");
+    assert.equal(addMonths("2026-12", 1), "2027-01");
+  });
+  test("impliedPath follows the FedWatch method", () => {
+    const decAvg = (9 * 3.95 + 22 * 4.2) / 31;
+    const path = impliedPath(3.88, [{ date: "2026-10-28" }, { date: "2026-12-09" }], { "2026-11": 100 - 3.95, "2026-12": 100 - decAvg });
+    assert.equal(path.length, 2);
+    assert.equal(path[0].method, "next_month");
+    assert.ok(Math.abs(path[0].changeBp - 7) < 1e-9);
+    assert.ok(Math.abs(path[0].probs.hike25 - 0.28) < 1e-9);
+    assert.equal(path[1].method, "same_month");
+    assert.ok(Math.abs(path[1].after - 4.2) < 1e-9);
+    assert.ok(Math.abs(path[1].probs.hike25 - 1) < 1e-9);
+  });
+  test("kalshiOutcomes normalizes only mutually exclusive events", () => {
+    const m = (yes_bid_dollars, yes_ask_dollars) => ({ ticker: "T", yes_sub_title: "x", yes_bid_dollars, yes_ask_dollars });
+    const ex = kalshiOutcomes([m("0.60", "0.62"), m("0.40", "0.42")], true);
+    assert.ok(Math.abs(ex[0].probability + ex[1].probability - 1) < 1e-9);
+    const single = kalshiOutcomes([m("0.04", "0.06")], false);
+    assert.ok(Math.abs(single[0].probability - 0.05) < 1e-9);
+  });
+});
+
+describe("signals: positioning, shorts, earnings, auctions, calendar", () => {
+  test("summarizePositioning ranks leveraged-fund net against history", () => {
+    const row = (d, long, short) => ({ report_date_as_yyyy_mm_dd: d, open_interest_all: "1000", lev_money_positions_long: String(long), lev_money_positions_short: String(short), asset_mgr_positions_long: "500", asset_mgr_positions_short: "100" });
+    const p = summarizePositioning("sp500", [row("2026-09-29T00:00:00.000", 100, 300), row("2026-10-06T00:00:00.000", 400, 100), row("2026-09-22T00:00:00.000", 200, 200)]);
+    assert.equal(p.date, "2026-10-06");
+    assert.equal(p.specNet, 300);
+    assert.equal(p.change1w, 500);
+    assert.equal(p.percentile, 1);
+    assert.equal(p.otherNet, 400);
+  });
+  test("parseShortVolume finds the symbol row", () => {
+    const text = "Date|Symbol|ShortVolume|ShortExemptVolume|TotalVolume|Market\n20261015|MU|5000|0|10000|B,Q,N\n";
+    assert.deepEqual(parseShortVolume(text, "mu"), { date: "2026-10-15", shortVolume: 5000, totalVolume: 10000, ratio: 0.5 });
+    assert.equal(parseShortVolume(text, "NVDA"), null);
+  });
+  test("parseReportText extracts date and timing", () => {
+    assert.deepEqual(parseReportText("expected* to report earnings on  10/29/2026 before market open."), { date: "2026-10-29", timing: "before_open" });
+    assert.deepEqual(parseReportText(""), { date: null, timing: null });
+  });
+  test("summarizeAuctions drops FRNs, labels TIPS and compares with the same tenor", () => {
+    const a = (auction_date, term, btc, dealer, extra = {}) => ({ auction_date, security_type: "Note", security_term: term, original_security_term: term, high_yield: "5.0", bid_to_cover_ratio: String(btc), primary_dealer_accepted: String(dealer), indirect_bidder_accepted: "50", total_accepted: "100", offering_amt: "100", reopening: "No", floating_rate: "No", inflation_index_security: "No", ...extra });
+    const rows = [a("2026-10-07", "10-Year", 2.8, 5), a("2026-09-10", "10-Year", 2.4, 10), a("2026-08-12", "10-Year", 2.6, 12), a("2026-09-23", "2-Year", 2.6, 40, { floating_rate: "Yes" }), a("2026-09-17", "10-Year", 2.2, 10, { inflation_index_security: "Yes" })];
+    const out = summarizeAuctions(rows, 10);
+    assert.equal(out.length, 4);
+    assert.equal(out[0].term, "10-Year");
+    assert.ok(Math.abs(out[0].prevBidToCover - 2.5) < 1e-9);
+    assert.ok(Math.abs(out[0].prevDealerShare - 0.11) < 1e-9);
+    assert.ok(out.some((r) => r.term === "10-Year TIPS"));
+  });
+  test("filterCalendar filters by country, impact and title", () => {
+    const ev = [
+      { title: "CPI m/m", country: "USD", date: "2026-10-14T08:30:00-04:00", impact: "High", forecast: "0.6%", previous: "0.4%" },
+      { title: "Speech", country: "USD", date: "2026-10-14T10:00:00-04:00", impact: "Low", forecast: "", previous: "" },
+      { title: "CPI y/y", country: "EUR", date: "2026-10-15T05:00:00-04:00", impact: "High", forecast: "2.1%", previous: "2.0%" },
+    ];
+    assert.deepEqual(filterCalendar(ev, { countries: ["usd"], impacts: ["High"], query: "cpi" }).map((e) => e.title), ["CPI m/m"]);
+  });
+});

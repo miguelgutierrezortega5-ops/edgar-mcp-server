@@ -1,0 +1,49 @@
+{
+  "manifest_version": "0.3",
+  "name": "market-signals-mcp",
+  "display_name": "Señales de mercado · opciones, Fed y sentimiento",
+  "version": "1.1.0",
+  "description": "Lo que el mercado ya descuenta: movimiento implícito y probabilidades de opciones, probabilidades de la Fed, consenso de datos económicos, posicionamiento CFTC, Fear & Greed, mercados de predicción y consenso de resultados.",
+  "long_description": "Servidor MCP sin claves que complementa a edgar-mcp-server con **expectativas del mercado** en lugar de opiniones:\n\n- **Opciones (Cboe, 15 min de retraso)**: movimiento esperado por vencimiento, volatilidad implícita, sesgo de 25 delta, put/call y probabilidad neutral al riesgo de cada nivel; movimiento aislado de un evento como los resultados.\n- **Fed**: probabilidad de subida, pausa o recorte por reunión con futuros de fondos federales (método CME FedWatch) y con Kalshi.\n- **Calendario económico** con el consenso de cada dato, y demanda de las subastas del Tesoro.\n- **Posicionamiento** de la CFTC con percentiles, **Fear & Greed** de CNN y **mercados de predicción** (Polymarket, Kalshi).\n- **Resultados**: consenso de BPA con revisiones y sorpresas (Nasdaq/Zacks), calendario e interés en corto.\n- **México**: tipo de cambio FIX y tasa objetivo de Banxico (token gratuito opcional).",
+  "author": {
+    "name": "miguelgutierrezortega5-ops",
+    "url": "https://github.com/miguelgutierrezortega5-ops"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server"
+  },
+  "homepage": "https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server",
+  "documentation": "https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server#segundo-servidor-market-signals-mcp-expectativas-del-mercado",
+  "support": "https://github.com/miguelgutierrezortega5-ops/edgar-mcp-server/issues",
+  "license": "MIT",
+  "keywords": ["options", "implied volatility", "fed", "fedwatch", "kalshi", "polymarket", "cot", "sentiment", "earnings", "short interest", "banxico"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/signals/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/signals/index.js"],
+      "env": {
+        "BANXICO_TOKEN": "${user_config.banxico_token}"
+      }
+    }
+  },
+  "user_config": {
+    "banxico_token": {
+      "type": "string",
+      "title": "Token de Banxico (opcional)",
+      "description": "Gratis en https://www.banxico.org.mx/SieAPIRest/service/v1/token. Solo hace falta para el tipo de cambio FIX y la tasa objetivo de Banxico.",
+      "required": false,
+      "sensitive": true
+    }
+  },
+  "tools_generated": false,
+  "prompts_generated": false,
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}

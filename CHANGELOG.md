@@ -4,6 +4,19 @@
 
 ### Nuevo
 
+- **Segundo servidor MCP, `market-signals-mcp`** (`dist/signals/index.js`), sin claves: lo que el mercado descuenta en lugar de opiniones.
+  - **Opciones (Cboe):** movimiento esperado por vencimiento, volatilidad implícita, sesgo de 25 delta, put/call, probabilidad neutral al riesgo de cada nivel y movimiento aislado de un evento (resultados).
+  - **Fed:** probabilidades por reunión con futuros de fondos federales (método CME FedWatch) y con Kalshi.
+  - **Bonos:** demanda de las subastas del Tesoro.
+  - **Calendario:** datos económicos con su consenso.
+  - **Posicionamiento:** CFTC con percentiles.
+  - **Sentimiento:** Fear & Greed de CNN; mercados de predicción de Polymarket y Kalshi.
+  - **Resultados:** consenso de Nasdaq/Zacks con revisiones y sorpresas, y calendario de resultados.
+  - **Ventas en corto:** interés en corto y volumen diario en corto de FINRA.
+  - **México:** series de Banxico (token gratuito).
+  - `npm run setup` registra los dos servidores en Claude Desktop y Claude Code.
+- **Skill `objective-market-analysis`**: probabilidades y colas calculadas con historia larga, panel de miedo y comportamiento de manada, corrección de sesgos de fuentes y registro de pronósticos con puntuación de calibración.
+
 - **Bot de trading de cripto y divisas** (`trading-bot/`): vigila los mercados, opera con una estrategia de cruce de medias con filtros de tendencia y RSI, gestiona el riesgo (riesgo fijo por operación, límite de pérdida diaria y parada por drawdown) y funciona en simulado, en exchanges de cripto vía ccxt o en OANDA. Incluye backtest y avisos por Telegram.
 - **Huellas de ballenas y aprendizaje** en el bot: estrategia de capitulación para cripto de bajo volumen (velas de 3m, filtro de cascada de BTC, límite de tamaño por liquidez, salida por tiempo), estudio de patrones (`npm run estudiar`), reajuste automático con validación en datos no vistos y pausa de los mercados sin ventaja (`npm run aprender`, cada 24 h en el bot), datos de Binance con volumen de compras agresivas, y velas de 1m y 3m.
 - **Lo mejor de otros bots** en el bot de trading: backtest de cartera con una cuenta compartida, protecciones (enfriamiento y pausa tras una racha de stop-loss), lista dinámica de pares de Binance por volumen, spread y antigüedad, detección de sesgo de anticipación (`npm run verificar`), control por Telegram (`/estado`, `/pausa`, `/reanudar`, `/cerrar`), cuentas simuladas separadas para cripto y divisas, y Dockerfile.

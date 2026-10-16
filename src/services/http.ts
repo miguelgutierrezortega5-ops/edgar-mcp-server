@@ -11,7 +11,10 @@ export class HttpError extends Error {
   }
 }
 
-export type Host = "data" | "www" | "efts" | "yahoo" | "treasury" | "fred" | "fredapi" | "worldbank";
+export type Host =
+  | "data" | "www" | "efts" | "yahoo" | "treasury" | "fred" | "fredapi" | "worldbank"
+  // market-signals-mcp sources
+  | "cboe" | "nasdaq" | "finra" | "fiscaldata" | "nyfed" | "kalshi" | "polymarket" | "cftc" | "cnn" | "forexfactory" | "fed" | "gdelt" | "banxico";
 
 const HOSTS: Record<Host, string> = {
   data: "https://data.sec.gov",
@@ -22,14 +25,30 @@ const HOSTS: Record<Host, string> = {
   fred: "https://fred.stlouisfed.org",
   fredapi: "https://api.stlouisfed.org",
   worldbank: "https://api.worldbank.org",
+  cboe: "https://cdn-api.cboe.com",
+  nasdaq: "https://api.nasdaq.com",
+  finra: "https://cdn.finra.org",
+  fiscaldata: "https://api.fiscaldata.treasury.gov",
+  nyfed: "https://markets.newyorkfed.org",
+  kalshi: "https://api.elections.kalshi.com",
+  polymarket: "https://gamma-api.polymarket.com",
+  cftc: "https://publicreporting.cftc.gov",
+  cnn: "https://production.dataviz.cnn.io",
+  forexfactory: "https://nfs.faireconomy.media",
+  fed: "https://www.federalreserve.gov",
+  gdelt: "https://api.gdeltproject.org",
+  banxico: "https://www.banxico.org.mx",
 };
+
+/** Hosts that only answer browser-like clients. */
+const BROWSER_UA_HOSTS = new Set<Host>(["yahoo", "treasury", "cboe", "nasdaq", "cnn", "forexfactory", "finra", "fed"]);
 
 /** Descriptive client id; FRED's bot filter rejects generic ones such as "Mozilla/5.0" or Node's default. */
 const CLIENT_UA = `edgar-mcp-server/${VERSION} (+${REPO_URL})`;
 
 function userAgent(host: Host): string {
   if (host === "data" || host === "www" || host === "efts") return secUserAgent();
-  if (host === "yahoo" || host === "treasury") return "Mozilla/5.0 (compatible; edgar-mcp-server)";
+  if (BROWSER_UA_HOSTS.has(host)) return "Mozilla/5.0 (compatible; edgar-mcp-server)";
   return CLIENT_UA;
 }
 
@@ -118,6 +137,8 @@ export interface GetOptions {
   as?: "json" | "text";
   /** Cache TTL in ms; 0 disables caching. */
   ttl?: number;
+  /** Extra request headers (e.g. an API token); not part of the cache key. */
+  headers?: Record<string, string>;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -129,9 +150,9 @@ function backoffMs(attempt: number, retryAfter?: string | null): number {
   return Number.isFinite(s) && s > 0 ? Math.min(s * 1000, 30_000) : 1000 * 2 ** attempt;
 }
 
-async function fetchBody(host: Host, url: string, as: "json" | "text"): Promise<string> {
+async function fetchBody(host: Host, url: string, as: "json" | "text", extra: Record<string, string> = {}): Promise<string> {
   const isSec = host === "data" || host === "www" || host === "efts";
-  const headers: Record<string, string> = { "User-Agent": userAgent(host), Accept: as === "json" ? "application/json" : "*/*" };
+  const headers: Record<string, string> = { "User-Agent": userAgent(host), Accept: as === "json" ? "application/json" : "*/*", ...extra };
 
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -162,7 +183,7 @@ export async function httpGet<T = unknown>(host: Host, pathAndQuery: string, opt
   const as = opts.as ?? "json";
   const url = hostUrl(host, pathAndQuery);
   const load = async () => {
-    const body = await fetchBody(host, url, as);
+    const body = await fetchBody(host, url, as, opts.headers);
     return { value: (as === "json" ? JSON.parse(body) : body) as T, size: body.length };
   };
   if (!opts.ttl) return (await load()).value;

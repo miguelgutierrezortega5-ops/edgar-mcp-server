@@ -25,10 +25,12 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "edgar-mcp-server": "dist/index.js"
+    "edgar-mcp-server": "dist/index.js",
+    "market-signals-mcp": "dist/signals/index.js"
   },
   "scripts": {
     "start": "node dist/index.js",
+    "start:signals": "node dist/signals/index.js",
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "prepare": "npm run build",
@@ -36,7 +38,7 @@
     "setup": "node scripts/setup.mjs",
     "bundle": "npm run build && node scripts/bundle.mjs",
     "test": "npm run build && node --test test/unit.test.mjs",
-    "test:live": "npm run build && node test/smoke.mjs"
+    "test:live": "npm run build && node test/smoke.mjs && node test/smoke-signals.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -57,6 +59,7 @@
     "skills",
     "scripts/setup.mjs",
     "manifest.json",
+    "manifest-signals.json",
     "README.md",
     "LICENSE"
   ]

@@ -63,6 +63,26 @@ Without network or Python (e.g. claude.ai):
 - save them as a `date,close` CSV and run with `--csv SYM=file.csv`;
 - with no code runtime, compute at least P(down), P5 and the worst intermediate point from the price table.
 
+### 2b. What markets already price (market-signals-mcp)
+
+Historical frequencies say what happened in similar states. Markets say what is being paid for today. Put both in the same table: the gap between them is information.
+
+- **Price horizon.** Use `options_get_implied_move` and take the expiry nearest the horizon.
+  - It gives the expected move (ATM straddle) and the risk-neutral P(≤−5%) and P(≥+5%).
+  - Risk-neutral odds slightly overstate downside, because they include a risk premium. Call them "probabilidad que paga el mercado", not a forecast.
+  - **Implied above historical:** the market is paying for an event or for fear.
+  - **Implied below historical:** complacency.
+- **Earnings.** Use `earnings_get_expectations`. It gives the priced move (options with `event_date`), the consensus with up/down revisions in the last 4 weeks, and recent surprises.
+  - Compare the priced move with the stock's historical average move on earnings day.
+  - Never give a one-sided range.
+- **Economic data.** Get the consensus from `calendar_get_economic_events` before the release. Judge the print against that consensus, using the measure the market trades.
+- **Fed.** Use `rates_get_fed_probabilities`. It has two independent sources: fed funds futures and Kalshi. Quote both when they differ by more than ~10 points. Never quote press-reported odds.
+- **Feeds into step 5:**
+  - `positioning_get_cot`: crowded futures positioning, as percentiles.
+  - `sentiment_get_fear_greed`: the 7 components.
+  - `sentiment_get_prediction_markets`: recession, Fed, S&P ranges.
+  - `stocks_get_short_interest`.
+
 ### 3. Tails and path, not just the center
 
 Never report a hit rate or a median alone. "Subió en 63% de los casos" always travels with:
@@ -193,7 +213,7 @@ Then confirm each point:
 ```
 **En números:** P(evento) = …% (n indep. …), rango …, impacto … MXN, horizonte ….
 **Historial:** último fallo / Brier … (n = …)   ← solo si hay pronósticos resueltos
-## Probabilidades          ← tabla de riskstats, fila adversa marcada
+## Probabilidades          ← riskstats (fila adversa marcada) + lo que paga el mercado (opciones, futuros, Kalshi)
 ## Miedo y manada          ← valor + percentil por indicador
 ## Evidencia               ← a favor de la caída | a favor de la subida
 ## Escenarios (suman 100%) ← probabilidad, magnitud, MXN, disparador

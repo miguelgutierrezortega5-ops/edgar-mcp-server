@@ -57,6 +57,7 @@ Sin preguntas: `npm run setup -- --user-agent "Tu Nombre tu@email.com" --yes`
 ```bash
 npm install
 claude mcp add edgar --scope user -e SEC_USER_AGENT="Tu Nombre tu@email.com" -- node "$(pwd)/dist/index.js"
+claude mcp add market-signals --scope user -- node "$(pwd)/dist/signals/index.js"
 mkdir -p ~/.claude/skills && cp -r skills/* ~/.claude/skills/
 ```
 
@@ -69,6 +70,11 @@ mkdir -p ~/.claude/skills && cp -r skills/* ~/.claude/skills/
       "command": "node",
       "args": ["/ruta/a/edgar-mcp-server/dist/index.js"],
       "env": { "SEC_USER_AGENT": "Tu Nombre tu@email.com" }
+    },
+    "market-signals": {
+      "command": "node",
+      "args": ["/ruta/a/edgar-mcp-server/dist/signals/index.js"],
+      "env": { "BANXICO_TOKEN": "opcional" }
     }
   }
 }
@@ -107,7 +113,7 @@ O usa las **plantillas** del menú **+ → edgar** en Claude Desktop:
 | `cartera_inversor` | Cartera 13F de un fondo o inversor y sus movimientos del trimestre |
 | `panorama_macro` | Tipos, inflación, empleo, crecimiento y riesgo de recesión |
 
-## Herramientas (20)
+## Herramientas de edgar (20)
 
 | Herramienta | Qué hace |
 | --- | --- |
@@ -131,6 +137,26 @@ O usa las **plantillas** del menú **+ → edgar** en Claude Desktop:
 | `macro_get_series` | Series económicas de FRED, hasta 5 a la vez, con variaciones interanuales y cambio de frecuencia |
 | `macro_search_series` | Busca series de FRED por palabra clave |
 | `macro_get_country_indicator` | Indicadores anuales por país del Banco Mundial |
+
+## Segundo servidor: market-signals-mcp (expectativas del mercado)
+
+`edgar` dice qué pasó: estados financieros, filings, precios. `market-signals` dice **qué está descontando el mercado ahora**, con datos que se negocian con dinero real en lugar de opiniones. Se instala junto con edgar (`npm run setup` registra los dos) y no necesita claves.
+
+| Herramienta | Qué responde | Fuente |
+| --- | --- | --- |
+| `options_get_implied_move` | Movimiento esperado por vencimiento (straddle ATM), volatilidad implícita, sesgo de 25 delta, put/call y probabilidad neutral al riesgo de caer o subir X%. Con `event_date` aísla el movimiento que se paga por un evento como los resultados | Cboe (cadenas con 15 min de retraso) |
+| `rates_get_fed_probabilities` | Probabilidad de subida, pausa o recorte en cada reunión del FOMC con dos mercados independientes | Futuros de fondos federales (método CME FedWatch) y Kalshi |
+| `rates_get_treasury_auctions` | Demanda de las subastas del Tesoro: cobertura, parte que absorbieron los dealers y compradores indirectos, frente a las 6 subastas previas del mismo plazo | Fiscal Data del Tesoro |
+| `calendar_get_economic_events` | Calendario económico de la semana con el **consenso** de cada dato (CPI, PPI, empleo, ventas…) en tu zona horaria | Forex Factory |
+| `positioning_get_cot` | Posicionamiento de fondos apalancados y gestores en futuros de índices, bonos, peso mexicano, VIX, oro, petróleo y bitcoin, con percentil histórico | CFTC (Commitments of Traders) |
+| `sentiment_get_fear_greed` | Índice Fear & Greed y sus 7 componentes | CNN |
+| `sentiment_get_prediction_markets` | Probabilidades con dinero real de recesión, Fed, inflación, rango del S&P 500… | Polymarket y Kalshi |
+| `earnings_get_expectations` | Fecha del próximo reporte, consenso de BPA con revisiones al alza/baja de las últimas 4 semanas, sorpresas pasadas y el movimiento que pagan las opciones | Nasdaq (consenso Zacks) y Cboe |
+| `earnings_get_calendar` | Empresas que reportan en una fecha, con consenso | Nasdaq |
+| `stocks_get_short_interest` | Interés en corto y días para cubrir, y volumen diario en corto | Nasdaq y FINRA |
+| `mexico_get_banxico_series` | Tipo de cambio FIX, tasa objetivo y cualquier serie del SIE | Banxico (token gratuito en `BANXICO_TOKEN`) |
+
+Pruébalo con: *"¿Qué probabilidad da el mercado a una subida de tasas en la próxima reunión de la Fed?"* o *"¿Cuánto espera el mercado de opciones que se mueva LLY con sus resultados?"*
 
 ## Configuración
 
@@ -191,6 +217,11 @@ cd trading-bot && npm install && npm run scan
 | FRED | [Términos de uso](https://fred.stlouisfed.org/docs/api/terms_of_use.html). La mayoría de series son públicas; algunas tienen copyright de terceros (S&P 500, VIX, diferenciales de ICE, Case-Shiller, U. Michigan, Freddie Mac) y solo permiten uso personal. La herramienta avisa de ellas | Opcional (búsqueda) | Solo series sin copyright de terceros |
 | Banco Mundial | [CC BY 4.0](https://datacatalog.worldbank.org/public-licenses): libre citando la fuente | No | Sí, citando |
 | Yahoo Finance | Endpoint **no oficial** sin licencia. Sus condiciones no permiten redistribuir los datos ni el uso comercial | No | **No** |
+| CFTC, Tesoro (Fiscal Data), Reserva Federal y Fed de Nueva York | Datos públicos del Gobierno de EE. UU. | No | Sí |
+| FINRA (volumen en corto) | Archivos públicos; [condiciones de FINRA](https://www.finra.org/terms-of-use) | No | Consultar |
+| Banxico (SIE) | API pública con [token gratuito](https://www.banxico.org.mx/SieAPIRest/service/v1/token); citar la fuente | Sí (gratis) | Sí, citando |
+| Kalshi y Polymarket | Datos públicos de mercado de sus API | No | Consultar sus condiciones |
+| Cboe (opciones con retraso), Nasdaq, CNN Fear & Greed y Forex Factory | Endpoints públicos **no oficiales** de sus sitios web. Uso personal; pueden cambiar sin aviso | No | **No** |
 
 Para un uso **comercial** de precios y dividendos, sustituye Yahoo por un proveedor con licencia (Polygon.io, Tiingo, Twelve Data, Financial Modeling Prep…; casi todos tienen un plan gratuito con clave).
 
