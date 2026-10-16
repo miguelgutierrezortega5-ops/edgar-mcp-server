@@ -59,3 +59,12 @@ These are real errors from the conversation that produced this skill. Four of th
 
 - **What happened.** After the September CPI, the answer quoted a Reuters sentence ("~49% chance") whose wording was ambiguous between holding and hiking.
 - **Correct handling.** Read `rates_get_fed_probabilities`, which gives two independent markets. On 16 October, fed funds futures priced 28% and Kalshi 29% for a hike on 28 October. Report both, and never relay press-reported odds.
+
+## 8. A market update built without the news connector
+
+- **What happened.** On 16 October the market update took all company news from web search and skipped Fiscal.ai, the tier-1 source for news, report dates and estimates. The user caught it.
+- **What it missed.**
+  - Lam Research's September-quarter consensus from Fiscal.ai: EPS $2.30 (from company guidance) against Zacks' $2.17, and revenue $8.2B against $6.72B the quarter before.
+  - Confirmed report dates and sessions for the holdings.
+- **A second lesson from the same call.** Fiscal.ai's NVDA summary was wrong (a "$16.1 billion" revenue beat a month before the report). Machine-written summaries need a second source before any figure is quoted.
+- **Correct handling.** Step 2c in SKILL.md.

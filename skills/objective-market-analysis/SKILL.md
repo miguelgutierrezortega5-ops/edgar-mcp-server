@@ -83,6 +83,15 @@ Historical frequencies say what happened in similar states. Markets say what is 
   - `sentiment_get_prediction_markets`: recession, Fed, S&P ranges.
   - `stocks_get_short_interest`.
 
+### 2c. Company news, dates and a second consensus (Fiscal.ai)
+
+The company news layer comes from Fiscal.ai, not from web search alone. Run it in every portfolio or market update, in one `execute_code` call (at most 6 helpers at once):
+- `company_news_summary` for each holding or bellwether that moved ≥2% or reports within 10 days.
+- `events_calendar` with the holdings' tickers and the next 6 weeks. It gives the date, whether it is confirmed or estimated, and the session (`before_open` / `after_close`).
+- `company_estimates` for the next report that moves the portfolio. Compare its consensus with `earnings_get_expectations` (Zacks) and use the more demanding one (step 7). Name the source field (`agentic_consensus`, `guidance_adjusted`).
+- **Cross-check before quoting.** The summaries are machine-written and can be wrong: on 16 October the NVDA summary reported a "$16.1 billion" quarterly revenue and a beat, a month before NVDA's report date. Quote a figure from a summary only when a second source (filing, press release, web) matches it; otherwise drop it.
+- Web search stays for market-wide stories (indices, Asia, credit) and for anything newer than the summary's `generatedAt`.
+
 ### 3. Tails and path, not just the center
 
 Never report a hit rate or a median alone. "Subió en 63% de los casos" always travels with:
