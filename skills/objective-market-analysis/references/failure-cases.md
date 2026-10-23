@@ -68,3 +68,12 @@ These are real errors from the conversation that produced this skill. Four of th
   - Confirmed report dates and sessions for the holdings.
 - **A second lesson from the same call.** Fiscal.ai's NVDA summary was wrong (a "$16.1 billion" revenue beat a month before the report). Machine-written summaries need a second source before any figure is quoted.
 - **Correct handling.** Step 2c in SKILL.md.
+
+## 9. Calm option prices read as lower risk
+
+- **What happened.** On 21 October, after a three-day rebound, the update said the risk of an immediate crash had fallen. It cited stress gauges back at normal levels: SMH skew −0.4 points, put/call volume 0.40x, VIX/VIX3M 0.89. SMH options paid 7% for a fall of 5% or more by 23 October.
+- **What followed.** The next day Lam Research's guidance, capped by supply constraints, took the SOX down 6.7% and ASML 6.9%. SMH closed the week 5.3% below Wednesday. The 15% forecast of a 5% SOX drop came true, and so did both 45% "lower" forecasts.
+- **The error.** The adverse historical sample for the same state (SOX about 24% below its high) gave 18% for a 5% weekly drop. Options at 7% were below history, which step 2b reads as complacency. The update read them as safety. Gauges that normalise after three up days measure positioning, not the risk of the next catalyst.
+- **Correct handling.**
+  - When implied odds fall below the adverse historical row, report both numbers and call the gap complacency.
+  - Keep the downside scenario at least at the historical figure until a catalyst has passed, not until the gauges calm.
