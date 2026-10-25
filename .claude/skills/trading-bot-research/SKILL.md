@@ -107,3 +107,4 @@ Update the findings above when a study changes them.
 - 2026-10-22 (20:07 UTC review): still no new report (Oct 18 07:52 UTC, ~4.5 days), pending 0. Third reminder sent, offering to stop reminding if the user wants to pause the project. While silent, check daily but only message every few days.
 - 2026-10-23 (20:07 UTC review): still no new report (Oct 18 07:52 UTC, ~5.5 days), pending 0; no message today (reminded yesterday).
 - 2026-10-24 (Saturday review): still no new report (Oct 18 07:52 UTC, ~6.5 days), pending 0. Sent the Saturday note with the last known balances (119.68 / 49.39 / 46.79) and how to restart.
+- 2026-10-25: still no new report (~7.5 days), pending 0; no message (Saturday note sent yesterday).
