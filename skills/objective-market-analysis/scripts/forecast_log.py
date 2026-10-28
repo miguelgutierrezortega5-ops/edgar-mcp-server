@@ -32,9 +32,12 @@ def closes(sym, start):
            f"?period1={p1}&period2={int(datetime.now(timezone.utc).timestamp())}&interval=1d")
     with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=30) as r:
         res = json.load(r)["chart"]["result"][0]
+    # While a session is open its daily bar holds the live price, not a close: leave it out.
+    session = res["meta"].get("currentTradingPeriod", {}).get("regular", {})
+    open_from = session.get("start") if datetime.now(timezone.utc).timestamp() < session.get("end", 0) else None
     out = {}
     for t, c in zip(res.get("timestamp") or [], res["indicators"]["quote"][0]["close"]):
-        if c is not None:
+        if c is not None and not (open_from and t >= open_from):
             out[datetime.fromtimestamp(t, tz=timezone.utc).date().isoformat()] = float(c)
     return sorted(out.items())
 
