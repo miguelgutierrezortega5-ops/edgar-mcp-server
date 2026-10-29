@@ -111,3 +111,4 @@ Update the findings above when a study changes them.
 - 2026-10-26: still no new report (~8.5 days), pending 0; no message (next reminder Wednesday Oct 28 if still silent).
 - 2026-10-27: still no new report (~9.5 days), pending 0; no message (next reminder Wednesday Oct 28).
 - 2026-10-28: still no new report (~10.5 days), pending 0. Wednesday reminder sent, offering to pause the daily review (the routine) until the user says so; do not disable it without their answer.
+- 2026-10-29: still no new report (~11.5 days), pending 0; no message (next one the Saturday note, Oct 31).
