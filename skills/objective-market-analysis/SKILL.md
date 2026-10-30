@@ -108,7 +108,7 @@ python3 scripts/spillover.py refuge --candidates XLP,XLV,XLU,XLE,GLD,TLT,JNJ,PG,
   - Only links of at least 3 standard errors are shown, and a link must hold without the company's single most extreme day.
 - **The type of news decides the contagion.** Company-specific news (share loss, execution) stays with the company. An industry message (demand, capex, PC or AI spending) moves the whole sector, whoever says it.
   - In 14 Intel drops on its own news from 2021 to 2026, ASML moved +0.2% on average.
-  - On 30 October 2026, Intel's PC-demand guidance took ASML down 6.5% with the SOX at −7.5%.
+  - On 30 October 2026, Intel's PC-demand guidance took ASML down 6.6% with the SOX at −7.2%.
   - Say which kind each event is.
 - **Calendar.** In every update, list the linked companies that report in the next 3 weeks (step 2c), with the event move the options price (step 2b) times the portfolio's sensitivity, in MXN.
 - **`rotation` before attributing a gain to a report.** It splits a holding's return over a window into its own report days, tech-down days, tech-up days and the rest, and compares its correlation with ^SOX with its normal level.
