@@ -92,6 +92,34 @@ The company news layer comes from Fiscal.ai, not from web search alone. Run it i
 - **Cross-check before quoting.** The summaries are machine-written and can be wrong: on 16 October the NVDA summary reported a "$16.1 billion" quarterly revenue and a beat, a month before NVDA's report date. Quote a figure from a summary only when a second source (filing, press release, web) matches it; otherwise drop it.
 - Web search stays for market-wide stories (indices, Asia, credit) and for anything newer than the summary's `generatedAt`.
 
+### 2d. Contagion from other companies and rotation (spillover.py)
+
+A holding often moves on another company's news: Intel's guidance, a peer's report, a hyperscaler's capex. Money also leaves tech for defensives and comes back. Measure both before explaining a move.
+
+```bash
+python3 scripts/spillover.py map --holdings ASML,KO,JNJ --bellwethers NVDA,TSM,AMD,INTC,LRCX,KLAC,AMAT,VST,MCD,PEP,COST --values ASML=30000,KO=10000,JNJ=10000
+python3 scripts/spillover.py rotation --symbols KO,JNJ,VRTX --start 2026-09-30 --reports KO=2026-10-27,JNJ=2026-10-13 --sector KO=XLP,JNJ=XLV
+python3 scripts/spillover.py refuge --candidates XLP,XLV,XLU,XLE,GLD,TLT,JNJ,PG,WMT,MXN=X
+```
+
+- **`map`** (run it when the portfolio changes):
+  - It gives, for each holding, the companies whose own news moved it over 5 years. A news day is a move left after the market, the sector and semiconductors.
+  - It also gives the portfolio's MXN impact per −10% of each company.
+  - Only links of at least 3 standard errors are shown, and a link must hold without the company's single most extreme day.
+- **The type of news decides the contagion.** Company-specific news (share loss, execution) stays with the company. An industry message (demand, capex, PC or AI spending) moves the whole sector, whoever says it.
+  - In 14 Intel drops on its own news from 2021 to 2026, ASML moved +0.2% on average.
+  - On 30 October 2026, Intel's PC-demand guidance took ASML down 6.5% with the SOX at −7.5%.
+  - Say which kind each event is.
+- **Calendar.** In every update, list the linked companies that report in the next 3 weeks (step 2c), with the event move the options price (step 2b) times the portfolio's sensitivity, in MXN.
+- **`rotation` before attributing a gain to a report.** It splits a holding's return over a window into its own report days, tech-down days, tech-up days and the rest, and compares its correlation with ^SOX with its normal level.
+  - Gains made on tech-down days, with a correlation in the bottom percentiles, are rotation, not fundamentals.
+  - Rotation gains can be given back when tech rebounds; show the tech-up days column.
+- **`refuge` when the user asks where to move.**
+  - Report what a refuge does on the shock day, which is usually a smaller fall rather than a rise.
+  - Report how often it beat QQQ over the next 63 days, and its P5: refuges cut the tail but have not won more often.
+  - Use the regime row that matches today (^SOX above or below its 200-day average) and cash as the zero-risk reference.
+  - Never present a refuge as safe because it rose this month: check its correlation with tech in the same window (gold fell with tech in October 2026).
+
 ### 3. Tails and path, not just the center
 
 Never report a hit rate or a median alone. "Subió en 63% de los casos" always travels with:
