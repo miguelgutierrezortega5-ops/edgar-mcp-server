@@ -195,7 +195,13 @@ Give bear, base and bull scenarios, each with:
 - a magnitude and the MXN impact;
 - the trigger that would confirm it.
 
-Derive the probabilities from steps 2–5 and show the link, e.g. "P(≤−5%) en la muestra adversa = 18% → escenario bajista 20%".
+Derive the probabilities from steps 2–5 and show the link, e.g. "P(≤−5%) con la volatilidad de hoy = 16%, muestra adversa 18%, opciones 20% → escenario bajista 18%".
+
+**Which number to state and log.** The 2008–2026 backtest (`references/calibration-backtest.md`, `scripts/calibrate.py`) settles this:
+- **Direction** ("higher or lower in h days"): stay within a few points of the base rate for that horizon. No tested signal beats it, including an 11-signal model with VIX, momentum and distance from highs.
+- **Magnitude** (≤ −5%, ≥ +10%…): use the volatility-scaled history, i.e. `fhs` in `calibrate.py`, the past h-day returns rescaled to today's volatility.
+  - When an event the price history cannot see (earnings, a Fed meeting) falls inside the horizon, move toward the options price.
+- **The adverse sample** stays in the answer as the downside reference. It over-forecasts falls on average, so it is not the logged probability.
 
 ### 9. What would prove it wrong
 
@@ -213,6 +219,9 @@ python3 scripts/forecast_log.py --log calibration/forecasts.jsonl score
 - Run `resolve` and `score` at the start of each new market session with the user.
 - When a resolved forecast missed, open the answer with it: "Mi estimación anterior (+4% a +9%) falló: resultado −3.9%."
 - Once there are resolved probability forecasts, quote the Brier score (0 = perfect, 0.25 = always saying 50%).
+  - Quote it with its luck band from `score`: what the same forecasts would score if every stated probability were exact.
+  - Split it by direction and magnitude.
+  - A Brier target cannot be met by choosing which forecasts to log, adding easy ones nobody asked for, or editing outcomes. That would make the log useless for its one job, detecting bias.
 - In the edgar-mcp-server repo the log lives at `calibration/forecasts.jsonl`. Commit it so it survives the session. Elsewhere, use any writable path.
 
 ## Writing rules
@@ -268,3 +277,4 @@ Una línea: información, no recomendación.
 - `references/failure-cases.md`: the concrete errors this skill was built to prevent, and the correct handling of each. Read it the first time the skill triggers in a conversation.
 - `references/source-biases.md`: why analyst targets, guidance, consensus beats, press narratives, short samples and survivorship mislead, with evidence.
 - `references/behavioral-metrics.md`: each fear and herding gauge, where to get it, how to read it, and the user's own behavioural numbers.
+- `references/calibration-backtest.md`: out-of-sample Brier of each way of setting a probability (2008–2026), and the logging rules that follow from it.

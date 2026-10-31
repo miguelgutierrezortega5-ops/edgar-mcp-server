@@ -10,7 +10,8 @@ Commands
            python3 forecast_log.py add --kind range --symbol ASML --horizon 1 --low 0.04 --high 0.09 --coverage 0.8 --claim "..."
            Add --start-date/--start-price for a past forecast, and --outcome/--realized to record one already resolved.
   resolve  python3 forecast_log.py resolve        (fills outcomes whose horizon has passed, using Yahoo closes)
-  score    python3 forecast_log.py score          (Brier score, calibration by bucket, range coverage, every miss)
+  score    python3 forecast_log.py score          (Brier score, what it would be if the probabilities were exact,
+                                                   calibration by bucket, range coverage, every miss)
 
 Log: JSON lines; path from --log (default ./forecasts.jsonl). In the edgar-mcp-server repo use calibration/forecasts.jsonl and commit it.
 """
@@ -18,6 +19,7 @@ Log: JSON lines; path from --log (default ./forecasts.jsonl). In the edgar-mcp-s
 import argparse
 import json
 import os
+import random
 import sys
 import urllib.parse
 import urllib.request
@@ -77,6 +79,8 @@ def cmd_add(a):
     }
     if a.kind == "prob":
         fc.update(op=a.op, threshold=a.threshold, prob=a.prob)
+        if a.ref is not None:
+            fc["ref"] = a.ref
     else:
         fc.update(low=a.low, high=a.high, coverage=a.coverage)
     if a.realized is not None:
@@ -118,6 +122,23 @@ def cmd_score(a):
         base = sum(r["outcome"] for r in probs) / len(probs)
         ref = sum((base - r["outcome"]) ** 2 for r in probs) / len(probs)
         print(f"Brier (0 = perfecto, 0.25 = decir 50% siempre): {brier:.3f} con n={len(probs)}; referencia de frecuencia base {ref:.3f}")
+        # What the same forecasts would score if every stated probability were exactly right: separates
+        # luck from miscalibration. Independent draws; forecasts written the same week widen the band.
+        rng = random.Random(0)
+        sims = sorted(sum((r["prob"] - (rng.random() < r["prob"])) ** 2 for r in probs) / len(probs) for _ in range(20000))
+        exp = sum(r["prob"] * (1 - r["prob"]) for r in probs) / len(probs)
+        print(f"Si las probabilidades dadas fueran exactas: Brier esperado {exp:.3f}, rango 90% {sims[1000]:.3f}–{sims[18999]:.3f}; "
+              f"{sum(1 for b in sims if b >= brier) / len(sims):.0%} de las veces saldría {brier:.3f} o peor")
+        for name, grp in (("dirección (umbral 0)", [r for r in probs if r["threshold"] == 0]),
+                          ("magnitud (umbral distinto de 0)", [r for r in probs if r["threshold"] != 0])):
+            if grp:
+                print(f"- {name}: Brier {sum((r['prob'] - r['outcome']) ** 2 for r in grp) / len(grp):.3f} con n={len(grp)}; "
+                      f"esperado si exactas {sum(r['prob'] * (1 - r['prob']) for r in grp) / len(grp):.3f}")
+        refs = [r for r in probs if r.get("ref") is not None]
+        if refs:
+            b_own = sum((r["prob"] - r["outcome"]) ** 2 for r in refs) / len(refs)
+            b_ref = sum((r["ref"] - r["outcome"]) ** 2 for r in refs) / len(refs)
+            print(f"Habilidad contra la frecuencia histórica de cada evento (n={len(refs)}): {1 - b_own / b_ref:+.0%} (Brier {b_own:.3f} contra {b_ref:.3f})")
         print("| Probabilidad dada | n | Frecuencia real |")
         print("|---|---|---|")
         for lo in (0, .2, .4, .6, .8):
@@ -154,6 +175,7 @@ def main():
     ad.add_argument("--start-price", type=float)
     ad.add_argument("--realized", type=float, help="retorno realizado si ya se conoce")
     ad.add_argument("--note")
+    ad.add_argument("--ref", type=float, help="frecuencia histórica del evento (clim de calibrate.py), para medir habilidad")
     sub.add_parser("resolve")
     sub.add_parser("score")
     a = ap.parse_args()
