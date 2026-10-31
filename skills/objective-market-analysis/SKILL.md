@@ -139,6 +139,10 @@ Use the **"sin deriva ⚠ref"** row as the forward reference. It removes the pas
 - Express results in the user's currency, including FX.
 - Give the recovery asymmetry: −20% needs +25% to get back.
 - Young ETFs are extended with an equivalent older fund (QQQM→QQQ, GLDM→GLD). Say so when it matters.
+- Helpers for routine checks:
+  - `python3 scripts/portfolio_value.py cartera.json` values the account. Keep the file outside the repository: it holds the user's positions.
+  - `node scripts/quote.mjs --since 2026-10-23 SYM...` gives last prices including pre- and after-market.
+  - `node scripts/signals.mjs --batch '[["tool",{...}]]'` calls market-signals-mcp from the shell (needs `npm run build`).
 
 ### 5. Fear and herding as numbers
 
