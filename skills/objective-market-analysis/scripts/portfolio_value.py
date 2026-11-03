@@ -17,13 +17,25 @@ import urllib.request
 UA = {"User-Agent": "Mozilla/5.0 (objective-market-analysis)"}
 
 
-def last(sym):
-    """Latest price and the previous regular close."""
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=5d&interval=1d"
+def chart(sym, query):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?{query}"
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
-        res = json.load(r)["chart"]["result"][0]
-    closes = [x for x in res["indicators"]["quote"][0]["close"] if x]
-    return res["meta"]["regularMarketPrice"], closes[-2]
+        return json.load(r)["chart"]["result"][0]
+
+
+def last(sym):
+    """Latest price, the previous regular close and that bar's timestamp (the session's open)."""
+    res = chart(sym, "range=5d&interval=1d")
+    bars = [(t, c) for t, c in zip(res["timestamp"], res["indicators"]["quote"][0]["close"]) if c]
+    return res["meta"]["regularMarketPrice"], bars[-2][1], bars[-2][0]
+
+
+def price_at(sym, ts):
+    """Price at a moment, from 30-minute bars. Currencies trade around the clock and their daily
+    bars close on London time, so the day's change is measured from the previous US close instead."""
+    res = chart(sym, "range=5d&interval=30m")
+    pts = [c for t, c in zip(res["timestamp"], res["indicators"]["quote"][0]["close"]) if c and t <= ts]
+    return pts[-1] if pts else None
 
 
 def main():
@@ -31,11 +43,13 @@ def main():
         sys.exit(__doc__)
     fx_sym = sys.argv[sys.argv.index("--fx") + 1] if "--fx" in sys.argv else "MXN=X"
     p = json.load(open(sys.argv[1]))
-    fx, fx0 = last(fx_sym)
+    fx, fx0, _ = last(fx_sym)
+    us_close = last("SPY")[2] + 6.5 * 3600  # daily bars are stamped at the 9:30 a.m. New York open
+    fx0 = price_at(fx_sym, us_close) or fx0
     cash = p.get("efectivo_reporto_mxn", 0) + p.get("liquidez_mxn", 0)
     rows, total, cost, day = [], cash, 0.0, 0.0
     for s, d in p["posiciones"].items():
-        px, px0 = last(s)
+        px, px0, _ = last(s)
         m, m0 = (1, 1) if s.endswith(".MX") else (fx, fx0)
         v = d["q"] * px * m
         total += v
