@@ -91,6 +91,12 @@ def cvar(xs, q=0.05):
     return sum(tail) / len(tail) if tail else float("nan")
 
 
+def cvar_up(xs, q=0.05):
+    """Average of the best q of outcomes: the upside counterpart of cvar()."""
+    tail = sorted(xs)[-max(1, int(len(xs) * q)):]
+    return sum(tail) / len(tail) if tail else float("nan")
+
+
 def std(xs):
     if len(xs) < 2:
         return float("nan")
@@ -154,7 +160,7 @@ def forward(p, idx, h):
         "p_le10": sum(1 for r in rs if r <= -0.10) / len(rs),
         "p_ge5": sum(1 for r in rs if r >= 0.05) / len(rs),
         "med": quantile(rs, 0.5), "p5": quantile(rs, 0.05), "p95": quantile(rs, 0.95),
-        "cvar5": cvar(rs), "mae_med": quantile(maes, 0.5), "mae_p25": quantile(maes, 0.25),
+        "cvar5": cvar(rs), "best5": cvar_up(rs), "mae_med": quantile(maes, 0.5), "mae_p25": quantile(maes, 0.25),
     }
 
 
@@ -206,8 +212,8 @@ def symbol_report(sym, rows, horizons, band):
 
     for h in horizons:
         print(f"\n### {sym}: horizonte {h} días hábiles")
-        print("| Muestra | n (indep.) | P(baja) | P(≤−5%) | P(≤−10%) | P(≥+5%) | Mediana | P5 | P95 | CVaR 5% | Peor punto intermedio (mediana / P25) |")
-        print("|---|---|---|---|---|---|---|---|---|---|---|")
+        print("| Muestra | n (indep.) | P(baja) | P(≤−5%) | P(≤−10%) | P(≥+5%) | Mediana | P5 | P95 | CVaR 5% | Mejor 5% (prom.) | Peor punto intermedio (mediana / P25) |")
+        print("|---|---|---|---|---|---|---|---|---|---|---|---|")
         rows_out = []
         for cname, cf in conds:
             for rname, rf in regimes:
@@ -221,7 +227,7 @@ def symbol_report(sym, rows, horizons, band):
         for name, st in rows_out:
             flag = (" ⚠P" if name == worst_down else "") + (" ⚠cola" if name == worst_tail else "")
             print(f"| {name}{flag} | {st['n']} ({st['n_eff']}) | {prob(st['p_down'])} | {prob(st['p_le5'])} | {prob(st['p_le10'])} | {prob(st['p_ge5'])} | "
-                  f"{pct(st['med'])} | {pct(st['p5'])} | {pct(st['p95'])} | {pct(st['cvar5'])} | {pct(st['mae_med'])} / {pct(st['mae_p25'])} |")
+                  f"{pct(st['med'])} | {pct(st['p5'])} | {pct(st['p95'])} | {pct(st['cvar5'])} | {pct(st['best5'])} | {pct(st['mae_med'])} / {pct(st['mae_p25'])} |")
         if credible:
             print(f"\nReferencia adversa (n indep. ≥ {MIN_EFFECTIVE_N}): mayor P(baja) → {worst_down}; peor cola P5 → {worst_tail}.")
 
@@ -384,8 +390,8 @@ def portfolio_report(spec, fx_sym, cash, horizons, csv_map, proxies, years):
                 res[demean][0].append(path[-1])
                 res[demean][1].append(min(path))
         print(f"\n### Cartera: horizonte {h} días hábiles (valores actuales, rendimientos históricos)")
-        print(f"| Muestra | n | P(pérdida) | P(pérdida >1%) | P(>2%) | P(>5%) | P(ganancia >2%) | Mediana | P5 | P95 | CVaR 5% | Peor punto intermedio mediano / P25 |")
-        print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        print(f"| Muestra | n | P(pérdida) | P(pérdida >1%) | P(>2%) | P(>5%) | P(ganancia >2%) | Mediana | P5 | P95 | CVaR 5% | Mejor 5% (prom.) | Peor punto intermedio mediano / P25 |")
+        print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for name, lo, demean in (("todo el periodo", 0, False), ("últimos 3 años", three_y_i, False),
                                  ("todo el periodo, sin deriva ⚠ref", 0, True), ("últimos 3 años, sin deriva", three_y_i, True)):
             xs, ms = res[demean][0][lo:], res[demean][1][lo:]
@@ -394,7 +400,7 @@ def portfolio_report(spec, fx_sym, cash, horizons, csv_map, proxies, years):
             f = lambda th: sum(1 for x in xs if x < -th * total) / len(xs)
             g2 = sum(1 for x in xs if x > 0.02 * total) / len(xs)
             print(f"| {name} | {len(xs)} | {prob(sum(1 for x in xs if x < 0) / len(xs))} | {prob(f(0.01))} | {prob(f(0.02))} | {prob(f(0.05))} | {prob(g2)} | "
-                  f"{quantile(xs, .5):+,.0f} | {quantile(xs, .05):+,.0f} | {quantile(xs, .95):+,.0f} | {cvar(xs):+,.0f} | {quantile(ms, .5):+,.0f} / {quantile(ms, .25):+,.0f} |")
+                  f"{quantile(xs, .5):+,.0f} | {quantile(xs, .05):+,.0f} | {quantile(xs, .95):+,.0f} | {cvar(xs):+,.0f} | {cvar_up(xs):+,.0f} | {quantile(ms, .5):+,.0f} / {quantile(ms, .25):+,.0f} |")
     print(f"\nCifras en {ccy}. ⚠ref = referencia para riesgo hacia adelante: las filas con deriva incluyen la subida pasada de activos que hoy se tienen porque subieron. Para recuperar una caída de X% hace falta subir X/(1−X): −10% → +11.1%, −20% → +25%, −30% → +42.9%.")
 
 

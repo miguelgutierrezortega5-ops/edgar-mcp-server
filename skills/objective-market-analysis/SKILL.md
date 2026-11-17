@@ -125,7 +125,8 @@ python3 scripts/spillover.py refuge --candidates XLP,XLV,XLU,XLE,GLD,TLT,JNJ,PG,
 Never report a hit rate or a median alone. "Subió en 63% de los casos" always travels with:
 - "antes cayó una mediana de X% (P25: Y%)";
 - the P5;
-- the CVaR (the average of the worst 5% of outcomes).
+- the CVaR (the average of the worst 5% of outcomes);
+- the P95 and the average of the best 5% of outcomes (`riskstats.py` prints it as "Mejor 5% (prom.)"). The user asked on 17 November 2026 for both tails every time: whenever the P5 or the worst-5% average appears, its upside counterpart appears next to it, with the same units.
 
 People act on the path: they sell at the intermediate low. So the worst intermediate point matters for the decision.
 
@@ -237,7 +238,7 @@ python3 scripts/forecast_log.py --log calibration/forecasts.jsonl score
 - **Corrections go first** and include the size of the error.
 - **Compassion is not an input.** Don't soften, encourage or reassure, and don't dramatize. Neutral and respectful is the register.
 - **No buy or sell instruction** (the policy of sec-financial-analysis stands).
-  - For each option the user is weighing (hold, reduce, add), give its numbers: median, P(loss) and P5 in MXN.
+  - For each option the user is weighing (hold, reduce, add), give its numbers: median, P(loss), P5 and P95, and the averages of the worst and best 5%, in MXN.
   - One line says the decision is the user's, not a paragraph.
 
 ## Check before sending
@@ -251,7 +252,7 @@ python3 scripts/tone_audit.py draft.md
 Then confirm each point:
 1. The downside the user asked about has a probability and a magnitude.
 2. The adverse sample (⚠) appears.
-3. Every upside statement has a downside counterpart of the same specificity.
+3. Every upside statement has a downside counterpart of the same specificity, and every P5 or worst-5% figure has its P95 or best-5% counterpart.
 4. No analyst target or company guidance is used as an expected outcome.
 5. Each data release gives the market's measure vs consensus first.
 6. The scenarios add up to 100%.
